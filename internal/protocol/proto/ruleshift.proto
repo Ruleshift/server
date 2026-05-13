@@ -1,0 +1,106 @@
+syntax = "proto3";
+
+package ruleshift.v1;
+
+option go_package = "github.com/Ruleshift/server/internal/protocol/generated/go/ruleshiftv1;ruleshiftv1";
+option csharp_namespace = "Ruleshift.Protocol.V1";
+
+message ClientEnvelope {
+  uint32 protocol_version = 1;
+  uint64 client_sequence = 2;
+  oneof payload {
+    AuthRequest auth_request = 10;
+    JoinRoomRequest join_room = 11;
+    IntCommand int_command = 12;
+    SnapshotRequest snapshot_request = 13;
+    Ping ping = 14;
+  }
+}
+
+message ServerEnvelope {
+  uint32 protocol_version = 1;
+  uint64 server_sequence = 2;
+  oneof payload {
+    AuthOk auth_ok = 10;
+    AuthFailed auth_failed = 11;
+    JoinRoomOk join_room_ok = 12;
+    StateSnapshot state_snapshot = 13;
+    StateDelta state_delta = 14;
+    ErrorMessage error = 15;
+    Pong pong = 16;
+  }
+}
+
+message AuthRequest {
+  string ticket = 1;
+}
+
+message AuthOk {
+  string player_id = 1;
+  string display_name = 2;
+}
+
+message AuthFailed {
+  string reason = 1;
+}
+
+message JoinRoomRequest {
+  string room_id = 1;
+  uint64 last_seen_revision = 2;
+}
+
+message JoinRoomOk {
+  string room_id = 1;
+  uint64 current_revision = 2;
+}
+
+enum IntOperation {
+  INT_OPERATION_UNSPECIFIED = 0;
+  INT_OPERATION_ADD = 1;
+  INT_OPERATION_SET = 2;
+}
+
+message IntCommand {
+  string room_id = 1;
+  IntOperation operation = 2;
+  int64 value = 3;
+  uint64 expected_revision = 4;
+}
+
+message StateSnapshot {
+  string room_id = 1;
+  int64 value = 2;
+  uint64 revision = 3;
+}
+
+message StateDelta {
+  string room_id = 1;
+  int64 previous_value = 2;
+  int64 new_value = 3;
+  uint64 previous_revision = 4;
+  uint64 new_revision = 5;
+  string changed_by_player_id = 6;
+  IntOperation operation = 7;
+  int64 operand = 8;
+}
+
+message SnapshotRequest {
+  string room_id = 1;
+  uint64 last_seen_revision = 2;
+}
+
+message ErrorMessage {
+  string code = 1;
+  string message = 2;
+}
+
+message Ping {
+  int64 client_time_unix_ms = 1;
+}
+
+message Pong {
+  int64 client_time_unix_ms = 1;
+  int64 server_time_unix_ms = 2;
+}
+
+
