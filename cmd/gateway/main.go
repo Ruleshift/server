@@ -9,6 +9,7 @@ import (
 
 	"github.com/Ruleshift/server/internal/auth"
 	"github.com/Ruleshift/server/internal/config"
+	"github.com/Ruleshift/server/internal/gateway"
 	netx "github.com/Ruleshift/server/internal/net"
 	"github.com/Ruleshift/server/internal/room"
 )
@@ -23,12 +24,20 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	authProvider := auth.NewMockProvider()
 	registry := room.NewRegistry(room.RuntimeConfig{InputQueueSize: cfg.RoomInputQueueSize})
+	gatewayHandler, err := gateway.New(gateway.Config{
+		MaxMessageBytes:      cfg.MaxMessageBytes,
+		SessionSendQueueSize: cfg.SessionSendQueueSize,
+		AuthTimeout:          cfg.AuthTimeout,
+	}, authProvider, registry, logger)
+	if err != nil {
+		logger.Error("create gateway", "error", err)
+		os.Exit(1)
+	}
+	defer gatewayHandler.Close()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthHandler)
-	mux.HandleFunc(netx.WebSocketPath, func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "websocket gateway will be implemented in phase 5", http.StatusNotImplemented)
-	})
+	mux.HandleFunc(netx.WebSocketPath, gatewayHandler.HandleWebSocket)
 
 	server := &http.Server{
 		Addr:              cfg.Addr,

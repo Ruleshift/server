@@ -2,8 +2,9 @@ package protocol
 
 import (
 	"errors"
-	"fmt"
 	"testing"
+
+	ruleshiftv1 "github.com/Ruleshift/server/internal/protocol/generated/go/ruleshiftv1"
 )
 
 func TestFrameCodecRoundTrip(t *testing.T) {
@@ -63,41 +64,22 @@ func TestFrameCodecRejectsOversizedDeclaredLength(t *testing.T) {
 }
 
 func TestFrameCodecEncodeDecodeMessage(t *testing.T) {
-	codec, err := NewFrameCodec(16)
+	codec, err := NewFrameCodec(64)
 	if err != nil {
 		t.Fatalf("NewFrameCodec returned error: %v", err)
 	}
 
-	wire := fakeProtobufCodec{}
-	frame, err := codec.EncodeMessage(wire, "hello")
+	want := &ruleshiftv1.Ping{ClientTimeUnixMs: 123}
+	frame, err := codec.EncodeMessage(want)
 	if err != nil {
 		t.Fatalf("EncodeMessage returned error: %v", err)
 	}
 
-	var decoded string
-	if err := codec.DecodeMessage(wire, frame, &decoded); err != nil {
+	var decoded ruleshiftv1.Ping
+	if err := codec.DecodeMessage(frame, &decoded); err != nil {
 		t.Fatalf("DecodeMessage returned error: %v", err)
 	}
-	if decoded != "hello" {
-		t.Fatalf("decoded = %q, want hello", decoded)
+	if decoded.GetClientTimeUnixMs() != want.GetClientTimeUnixMs() {
+		t.Fatalf("decoded client time = %d, want %d", decoded.GetClientTimeUnixMs(), want.GetClientTimeUnixMs())
 	}
-}
-
-type fakeProtobufCodec struct{}
-
-func (fakeProtobufCodec) Marshal(message any) ([]byte, error) {
-	value, ok := message.(string)
-	if !ok {
-		return nil, fmt.Errorf("unsupported fake message %T", message)
-	}
-	return []byte(value), nil
-}
-
-func (fakeProtobufCodec) Unmarshal(payload []byte, message any) error {
-	value, ok := message.(*string)
-	if !ok {
-		return fmt.Errorf("unsupported fake target %T", message)
-	}
-	*value = string(payload)
-	return nil
 }

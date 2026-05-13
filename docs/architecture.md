@@ -23,7 +23,20 @@ Ruleshift is an authoritative multiplayer state server. The future domain is a S
 
 ### Gateway
 
-`cmd/gateway` owns HTTP server setup and transport wiring. It should stay thin: decode envelopes, validate session state, call auth, submit room commands, and write server envelopes.
+`cmd/gateway` owns HTTP server setup. `internal/gateway` owns the WebSocket state machine: decode envelopes, validate session state, call auth, submit room commands, and write server envelopes.
+
+Phase 5 gateway behavior:
+
+- `/healthz` returns a simple HTTP health response;
+- `/ws` upgrades to WebSocket;
+- WebSocket messages are binary;
+- binary payloads are `uint32` length-prefixed protobuf envelopes;
+- `AuthRequest` must be the first client envelope;
+- `JoinRoomRequest` creates or joins a room and returns `JoinRoomOk` plus `StateSnapshot`;
+- `IntCommand` is submitted to the authoritative room runtime;
+- successful commands are broadcast as `StateDelta` to all joined sessions;
+- app-level `Ping` returns `Pong`;
+- basic `client_sequence` monotonic checks reject repeated or out-of-order client messages.
 
 ### Auth
 
@@ -31,7 +44,7 @@ Ruleshift is an authoritative multiplayer state server. The future domain is a S
 
 ### Protocol
 
-`internal/protocol` owns binary framing and protobuf schema. Every client message flows through `ClientEnvelope`; every server message flows through `ServerEnvelope`.
+`internal/protocol` owns binary framing, protobuf schema, generated bindings, and envelope validation. Every client message flows through `ClientEnvelope`; every server message flows through `ServerEnvelope`.
 
 ### RoomRegistry
 
@@ -65,7 +78,7 @@ Room sessions own bounded outbound queues. Runtime broadcast uses only non-block
 - closed sessions are removed from the room subscriber set;
 - runtime shutdown closes joined sessions with `shutdown`.
 
-The concrete WebSocket writer loop is still planned for phase 5, but room logic already avoids blocking on network writes.
+The WebSocket writer loop drains bounded session queues outside the room runtime, so room logic avoids blocking on network writes.
 
 ### Reconnect
 

@@ -53,7 +53,7 @@ Install:
 Then run:
 
 ```powershell
-make proto
+.\scripts\proto.ps1
 ```
 
 Equivalent explicit commands:
@@ -63,22 +63,17 @@ protoc -I . --go_out=. --go_opt=module=github.com/Ruleshift/server internal/prot
 protoc -I . --csharp_out=unity-client/Assets/Scripts/Network/Generated internal/protocol/proto/ruleshift.proto
 ```
 
-In the current local environment `protoc-gen-go` is available, but `protoc` is not visible in PATH. Phase 2 includes the schema, generation targets, and Go protocol wrapper validation while leaving generated files out of the repository.
+`protoc` is installed through WinGet. The repository includes `scripts/proto.ps1`, which prepends the WinGet install path before running generation, so codegen works even if the already-running shell has not refreshed PATH.
 
 ## Go Wrapper Layer
 
-Until generated code is available, `internal/protocol` exposes small wrapper structs matching the schema shape:
+The generated Go package is:
 
-- `ClientEnvelope`
-- `ServerEnvelope`
-- `AuthRequest`
-- `JoinRoomRequest`
-- `IntCommand`
-- `SnapshotRequest`
-- `StateSnapshot`
-- `StateDelta`
+```go
+github.com/Ruleshift/server/internal/protocol/generated/go/ruleshiftv1
+```
 
-The wrapper layer validates protocol version, required payloads, known operations, and unknown payloads. It is intentionally narrow and will be replaced at gateway boundaries by generated protobuf messages in the next implementation step.
+`internal/protocol` keeps only the length-prefix frame codec and validation helpers around generated messages.
 
 ## Error Handling
 

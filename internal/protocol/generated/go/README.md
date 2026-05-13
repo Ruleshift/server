@@ -1,9 +1,9 @@
 # Generated Go Protobuf Files
 
-Generated Go protobuf files for `internal/protocol/proto/ruleshift.proto` will live under this directory after running:
+Generated Go protobuf files for `internal/protocol/proto/ruleshift.proto` live under this directory after running:
 
 ```powershell
-make proto-go
+.\scripts\proto.ps1
 ```
 
 Do not edit generated files by hand.

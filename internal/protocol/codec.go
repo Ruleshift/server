@@ -4,23 +4,20 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+
+	"google.golang.org/protobuf/proto"
 )
 
 const CurrentVersion uint32 = 1
 
 var (
-	ErrFrameTooLarge  = errors.New("frame payload exceeds max size")
-	ErrMalformedFrame = errors.New("malformed frame")
-	ErrNilWireCodec   = errors.New("nil protobuf wire codec")
+	ErrFrameTooLarge   = errors.New("frame payload exceeds max size")
+	ErrMalformedFrame  = errors.New("malformed frame")
+	ErrNilProtoMessage = errors.New("nil protobuf message")
 )
 
 type FrameCodec struct {
 	MaxMessageBytes uint32
-}
-
-type ProtobufCodec interface {
-	Marshal(message any) ([]byte, error)
-	Unmarshal(payload []byte, message any) error
 }
 
 func NewFrameCodec(maxMessageBytes int) (FrameCodec, error) {
@@ -65,12 +62,12 @@ func (c FrameCodec) Decode(frame []byte) ([]byte, error) {
 	return payload, nil
 }
 
-func (c FrameCodec) EncodeMessage(wire ProtobufCodec, message any) ([]byte, error) {
-	if wire == nil {
-		return nil, ErrNilWireCodec
+func (c FrameCodec) EncodeMessage(message proto.Message) ([]byte, error) {
+	if message == nil {
+		return nil, ErrNilProtoMessage
 	}
 
-	payload, err := wire.Marshal(message)
+	payload, err := proto.Marshal(message)
 	if err != nil {
 		return nil, fmt.Errorf("marshal protobuf message: %w", err)
 	}
@@ -82,16 +79,16 @@ func (c FrameCodec) EncodeMessage(wire ProtobufCodec, message any) ([]byte, erro
 	return frame, nil
 }
 
-func (c FrameCodec) DecodeMessage(wire ProtobufCodec, frame []byte, message any) error {
-	if wire == nil {
-		return ErrNilWireCodec
+func (c FrameCodec) DecodeMessage(frame []byte, message proto.Message) error {
+	if message == nil {
+		return ErrNilProtoMessage
 	}
 
 	payload, err := c.Decode(frame)
 	if err != nil {
 		return fmt.Errorf("decode protobuf frame: %w", err)
 	}
-	if err := wire.Unmarshal(payload, message); err != nil {
+	if err := proto.Unmarshal(payload, message); err != nil {
 		return fmt.Errorf("unmarshal protobuf message: %w", err)
 	}
 	return nil

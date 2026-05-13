@@ -28,24 +28,24 @@ The server is authoritative: clients send intent, the server decides ordering, a
 Implemented in this iteration:
 
 - Go module and reviewable project skeleton.
-- `cmd/gateway` entrypoint with config loading, structured logging, `/healthz`, and a placeholder `/ws` endpoint.
+- `cmd/gateway` entrypoint with config loading, structured logging, `/healthz`, and `/ws`.
 - `cmd/botload` entrypoint with planned load-test flags.
 - Auth interfaces with local mock provider and Steam Web API provider skeleton.
 - Authoritative room state with `int64` value, monotonic `uint64` revision, Add/Set command apply logic, snapshots, deltas, and registry.
 - Actor-like `RoomRuntime` owns state, accepts commands through a bounded queue, registers room-local delta subscribers, and broadcasts the same delta to joined clients.
 - Bounded `PlayerSession` outbound queues with non-blocking send, snapshot compaction for lagging clients, repeated slow-consumer disconnects, and graceful shutdown close.
+- WebSocket gateway on `/ws` with binary length-prefixed protobuf envelopes, mock auth, join room, snapshots, Add/Set commands, delta broadcast, app-level ping/pong, and basic client sequence checks.
 - Protobuf schema in `internal/protocol/proto/ruleshift.proto`.
 - Length-prefixed binary frame codec for protobuf payloads.
-- Go protocol wrapper types and validation for envelope versioning, oneof-style payloads, and command fields.
+- Generated Go and C# protobuf bindings.
+- Protocol validation for generated envelope versioning, oneof-style payloads, and command fields.
 - Makefile targets for Go and C# protobuf generation.
-- Unit tests for mock auth, config, framing, envelope validation, bounded send queues, integer command apply, room broadcast, invalid commands, concurrent command ordering, slow consumers, and runtime shutdown.
+- Unit and integration tests for mock auth, config, framing, envelope validation, bounded send queues, integer command apply, room broadcast, invalid commands, concurrent command ordering, slow consumers, runtime shutdown, and WebSocket gateway flows.
 - Documentation for architecture, protocol, Steam integration, Unity integration, and performance plan.
 
 Not implemented yet:
 
-- Real WebSocket read/write loop.
-- Checked-in generated protobuf Go/C# code. `protoc-gen-go` is available, but `protoc` is not currently visible in PATH in this session.
-- WebSocket-backed network session write loops and reconnect/session replacement behavior.
+- Reconnect/session replacement behavior.
 - Prometheus metrics and pprof endpoints.
 - Bot load execution against the gateway.
 - Card game mechanics. These are intentionally out of scope for the MVP.
@@ -69,6 +69,12 @@ Health check:
 
 ```powershell
 Invoke-WebRequest http://localhost:8080/healthz
+```
+
+WebSocket endpoint:
+
+```text
+ws://localhost:8080/ws
 ```
 
 ## Configuration
@@ -102,10 +108,10 @@ The protobuf schema lives in [internal/protocol/proto/ruleshift.proto](internal/
 Generate protobuf bindings after installing `protoc` and `protoc-gen-go`:
 
 ```powershell
-make proto
+.\scripts\proto.ps1
 ```
 
-In this session `protoc-gen-go` is available, but `protoc` is not visible in PATH yet.
+The script prepends the WinGet-installed `protoc.exe` path for the current run, so generation works even if the already-running shell has not refreshed PATH.
 
 ## Development Roadmap
 
