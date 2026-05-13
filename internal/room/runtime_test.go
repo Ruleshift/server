@@ -147,10 +147,144 @@ func TestRoomRuntimeRejectsInvalidCommandWithoutBroadcast(t *testing.T) {
 	}
 }
 
+func TestRoomRuntimeCompactsSlowConsumerQueueToSnapshot(t *testing.T) {
+	runtime, cancel, done := startTestRuntimeWithConfig(t, RuntimeConfig{
+		InputQueueSize:          8,
+		SlowConsumerStrikeLimit: 2,
+	})
+	defer stopTestRuntime(t, cancel, done)
+
+	session, err := NewBoundedPlayerSession("player-1", 1)
+	if err != nil {
+		t.Fatalf("NewBoundedPlayerSession returned error: %v", err)
+	}
+
+	ctx, cancelCtx := context.WithTimeout(context.Background(), time.Second)
+	defer cancelCtx()
+
+	if _, err := runtime.Join(ctx, session); err != nil {
+		t.Fatalf("Join returned error: %v", err)
+	}
+
+	first, err := runtime.Submit(ctx, IntCommand{
+		RoomID:    "room-1",
+		PlayerID:  "player-1",
+		Operation: OperationAdd,
+		Value:     1,
+	})
+	if err != nil {
+		t.Fatalf("first Submit returned error: %v", err)
+	}
+	if first.BroadcastCount != 1 {
+		t.Fatalf("first BroadcastCount = %d, want 1", first.BroadcastCount)
+	}
+
+	second, err := runtime.Submit(ctx, IntCommand{
+		RoomID:    "room-1",
+		PlayerID:  "player-1",
+		Operation: OperationAdd,
+		Value:     1,
+	})
+	if err != nil {
+		t.Fatalf("second Submit returned error: %v", err)
+	}
+	if second.SnapshotCompactions != 1 {
+		t.Fatalf("SnapshotCompactions = %d, want 1", second.SnapshotCompactions)
+	}
+	if session.IsClosed() {
+		t.Fatal("session closed after first slow-consumer strike")
+	}
+
+	message := readRoomMessage(t, session.Outbound())
+	if message.Kind != MessageKindStateSnapshot {
+		t.Fatalf("message kind = %d, want MessageKindStateSnapshot", message.Kind)
+	}
+	if message.Snapshot.Value != 2 || message.Snapshot.Revision != 2 {
+		t.Fatalf("snapshot = value %d revision %d, want 2/2", message.Snapshot.Value, message.Snapshot.Revision)
+	}
+}
+
+func TestRoomRuntimeDisconnectsPersistentSlowConsumer(t *testing.T) {
+	runtime, cancel, done := startTestRuntimeWithConfig(t, RuntimeConfig{
+		InputQueueSize:          8,
+		SlowConsumerStrikeLimit: 2,
+	})
+	defer stopTestRuntime(t, cancel, done)
+
+	session, err := NewBoundedPlayerSession("player-1", 1)
+	if err != nil {
+		t.Fatalf("NewBoundedPlayerSession returned error: %v", err)
+	}
+
+	ctx, cancelCtx := context.WithTimeout(context.Background(), time.Second)
+	defer cancelCtx()
+
+	if _, err := runtime.Join(ctx, session); err != nil {
+		t.Fatalf("Join returned error: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		result, err := runtime.Submit(ctx, IntCommand{
+			RoomID:    "room-1",
+			PlayerID:  "player-1",
+			Operation: OperationAdd,
+			Value:     1,
+		})
+		if err != nil {
+			t.Fatalf("Submit %d returned error: %v", i, err)
+		}
+		if i == 2 && result.DisconnectedSlowConsumers != 1 {
+			t.Fatalf("DisconnectedSlowConsumers = %d, want 1", result.DisconnectedSlowConsumers)
+		}
+	}
+
+	if !session.IsClosed() {
+		t.Fatal("session is open, want closed")
+	}
+	if session.CloseReason() != CloseReasonSlowConsumer {
+		t.Fatalf("CloseReason = %q, want %q", session.CloseReason(), CloseReasonSlowConsumer)
+	}
+}
+
+func TestRoomRuntimeShutdownClosesJoinedSessions(t *testing.T) {
+	runtime, cancel, done := startTestRuntime(t)
+
+	session := newCollectingSink("player-1")
+	ctx, cancelCtx := context.WithTimeout(context.Background(), time.Second)
+	defer cancelCtx()
+
+	if _, err := runtime.Join(ctx, session); err != nil {
+		t.Fatalf("Join returned error: %v", err)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for room runtime shutdown")
+	}
+
+	if !session.IsClosed() {
+		t.Fatal("session is open after runtime shutdown")
+	}
+	if session.closeReason != CloseReasonShutdown {
+		t.Fatalf("closeReason = %q, want %q", session.closeReason, CloseReasonShutdown)
+	}
+}
+
 func startTestRuntime(t *testing.T) (*RoomRuntime, context.CancelFunc, <-chan error) {
 	t.Helper()
 
-	runtime, err := NewRuntime("room-1", RuntimeConfig{InputQueueSize: 128})
+	return startTestRuntimeWithConfig(t, RuntimeConfig{InputQueueSize: 128})
+}
+
+func startTestRuntimeWithConfig(t *testing.T, cfg RuntimeConfig) (*RoomRuntime, context.CancelFunc, <-chan error) {
+	t.Helper()
+
+	runtime, err := NewRuntime("room-1", cfg)
 	if err != nil {
 		t.Fatalf("NewRuntime returned error: %v", err)
 	}
@@ -169,16 +303,21 @@ func stopTestRuntime(t *testing.T, cancel context.CancelFunc, done <-chan error)
 
 	cancel()
 	select {
-	case <-done:
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run returned error: %v", err)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for room runtime shutdown")
 	}
 }
 
 type collectingSink struct {
-	playerID string
-	mu       sync.Mutex
-	received []StateDelta
+	playerID    string
+	mu          sync.Mutex
+	received    []StateDelta
+	closed      bool
+	closeReason CloseReason
 }
 
 func newCollectingSink(playerID string) *collectingSink {
@@ -189,11 +328,40 @@ func (s *collectingSink) PlayerID() string {
 	return s.playerID
 }
 
-func (s *collectingSink) TrySendDelta(delta StateDelta) error {
+func (s *collectingSink) TrySend(message RoomMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return ErrSessionClosed
+	}
+	if message.Kind != MessageKindStateDelta {
+		return nil
+	}
+	delta := message.Delta
 	s.received = append(s.received, delta)
 	return nil
+}
+
+func (s *collectingSink) TrySendSnapshot(StateSnapshot) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return ErrSessionClosed
+	}
+	return nil
+}
+
+func (s *collectingSink) IsClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
+func (s *collectingSink) Close(reason CloseReason) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+	s.closeReason = reason
 }
 
 func (s *collectingSink) deltas() []StateDelta {
@@ -203,4 +371,19 @@ func (s *collectingSink) deltas() []StateDelta {
 	copied := make([]StateDelta, len(s.received))
 	copy(copied, s.received)
 	return copied
+}
+
+func readRoomMessage(t *testing.T, ch <-chan RoomMessage) RoomMessage {
+	t.Helper()
+
+	select {
+	case message, ok := <-ch:
+		if !ok {
+			t.Fatal("outbound channel is closed")
+		}
+		return message
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for room message")
+		return RoomMessage{}
+	}
 }

@@ -33,18 +33,19 @@ Implemented in this iteration:
 - Auth interfaces with local mock provider and Steam Web API provider skeleton.
 - Authoritative room state with `int64` value, monotonic `uint64` revision, Add/Set command apply logic, snapshots, deltas, and registry.
 - Actor-like `RoomRuntime` owns state, accepts commands through a bounded queue, registers room-local delta subscribers, and broadcasts the same delta to joined clients.
+- Bounded `PlayerSession` outbound queues with non-blocking send, snapshot compaction for lagging clients, repeated slow-consumer disconnects, and graceful shutdown close.
 - Protobuf schema in `internal/protocol/proto/ruleshift.proto`.
 - Length-prefixed binary frame codec for protobuf payloads.
 - Go protocol wrapper types and validation for envelope versioning, oneof-style payloads, and command fields.
 - Makefile targets for Go and C# protobuf generation.
-- Unit tests for mock auth, config, framing, envelope validation, bounded send queues, integer command apply, room broadcast, invalid commands, and concurrent command ordering.
+- Unit tests for mock auth, config, framing, envelope validation, bounded send queues, integer command apply, room broadcast, invalid commands, concurrent command ordering, slow consumers, and runtime shutdown.
 - Documentation for architecture, protocol, Steam integration, Unity integration, and performance plan.
 
 Not implemented yet:
 
 - Real WebSocket read/write loop.
 - Checked-in generated protobuf Go/C# code. `protoc-gen-go` is available, but `protoc` is not currently visible in PATH in this session.
-- Network session broadcast, slow-consumer disconnects, and session replacement behavior.
+- WebSocket-backed network session write loops and reconnect/session replacement behavior.
 - Prometheus metrics and pprof endpoints.
 - Bot load execution against the gateway.
 - Card game mechanics. These are intentionally out of scope for the MVP.

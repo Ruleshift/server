@@ -8,7 +8,7 @@ Ruleshift is an authoritative multiplayer state server. The future domain is a S
 - Phase 1: project skeleton with Go module, entrypoints, config, logging, and package boundaries.
 - Phase 2: protobuf schema, generation targets, framing, and protocol validation fallback.
 - Phase 3: authoritative integer room model with sequential runtime tests.
-- Phase 4: actor-like runtime hardening with full bounded queues and slow-consumer handling.
+- Phase 4: actor-like runtime hardening with bounded session queues and slow-consumer handling.
 - Phase 5: WebSocket gateway.
 - Phase 6: Steam-compatible authentication.
 - Phase 7: reconnect and snapshot resume.
@@ -52,13 +52,20 @@ Phase 3 behavior:
 
 ### State Replication
 
-Successful commands produce a monotonically increasing revision and a `StateDelta`. Joined clients are represented by a small room-local `DeltaSink` interface. The runtime sends the same delta object to every joined sink, keeping network implementation out of room logic.
+Successful commands produce a monotonically increasing revision and a `StateDelta`. Joined clients are represented by a small room-local `PlayerSession` interface. The runtime sends the same delta object to every joined session, keeping network implementation out of room logic.
 
 Joining clients receive a `StateSnapshot`. Reconnect-specific resume behavior is planned for phase 7.
 
 ### Backpressure
 
-Network sessions will own bounded send queues. Room runtime must never block forever on network writes; slow consumers are handled by queue policy and eventual disconnect. Phase 3 uses `TrySendDelta` on `DeltaSink`; Phase 4 will define the concrete slow-consumer policy.
+Room sessions own bounded outbound queues. Runtime broadcast uses only non-blocking sends:
+
+- first delta overflow increments a slow-consumer strike and compacts queued deltas into a fresh `StateSnapshot`;
+- repeated overflow closes the session with `slow_consumer`;
+- closed sessions are removed from the room subscriber set;
+- runtime shutdown closes joined sessions with `shutdown`.
+
+The concrete WebSocket writer loop is still planned for phase 5, but room logic already avoids blocking on network writes.
 
 ### Reconnect
 
