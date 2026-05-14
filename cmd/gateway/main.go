@@ -21,7 +21,11 @@ func main() {
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	authProvider := auth.NewMockProvider()
+	authProvider, err := buildAuthProvider(cfg)
+	if err != nil {
+		logger.Error("create auth provider", "error", err)
+		os.Exit(1)
+	}
 	registry := room.NewRegistry(room.RuntimeConfig{InputQueueSize: cfg.RoomInputQueueSize})
 	gatewayHandler, err := gateway.New(gateway.Config{
 		MaxMessageBytes:      cfg.MaxMessageBytes,
@@ -57,6 +61,17 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("gateway stopped", "error", err)
 		os.Exit(1)
+	}
+}
+
+func buildAuthProvider(cfg config.Config) (auth.Provider, error) {
+	switch cfg.AuthProvider {
+	case "mock":
+		return auth.NewMockProvider(), nil
+	case "steam":
+		return auth.NewSteamWebAPIProviderFromEnv(cfg.SteamAppID, nil)
+	default:
+		return nil, fmt.Errorf("unsupported auth provider %q", cfg.AuthProvider)
 	}
 }
 

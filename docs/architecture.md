@@ -40,7 +40,7 @@ Phase 5 gateway behavior:
 
 ### Auth
 
-`internal/auth` exposes a small `Provider` interface. Room logic receives server-side player identity only after successful authentication. Steam integration remains replaceable and is not coupled to room state.
+`internal/auth` exposes a small `Provider` interface. `MockProvider` supports local tickets like `mock:player-1`. `SteamWebAPIProvider` validates Steam auth session tickets with `ISteamUserAuth/AuthenticateUserTicket` through an injectable HTTP client, with the Steam Web API key read only from server environment. Room logic receives server-side player identity only after successful authentication. Steam integration remains replaceable and is not coupled to room state.
 
 ### Protocol
 

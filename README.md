@@ -30,7 +30,7 @@ Implemented in this iteration:
 - Go module and reviewable project skeleton.
 - `cmd/gateway` entrypoint with config loading, structured logging, `/healthz`, and `/ws`.
 - `cmd/botload` entrypoint with planned load-test flags.
-- Auth interfaces with local mock provider and Steam Web API provider skeleton.
+- Auth interfaces with local mock provider and Steam Web API `AuthenticateUserTicket` provider behind an injectable HTTP client.
 - Authoritative room state with `int64` value, monotonic `uint64` revision, Add/Set command apply logic, snapshots, deltas, and registry.
 - Actor-like `RoomRuntime` owns state, accepts commands through a bounded queue, registers room-local delta subscribers, and broadcasts the same delta to joined clients.
 - Gateway-owned websocket sessions implement `room.PlayerSink` with bounded outbound queues, non-blocking send, snapshot compaction for lagging clients, repeated slow-consumer disconnects, and graceful shutdown close.
@@ -84,6 +84,9 @@ Environment variables:
 | --- | --- | --- |
 | `RULESHIFT_ADDR` | `:8080` | HTTP gateway listen address |
 | `RULESHIFT_ENV` | `dev` | Environment label for logs |
+| `RULESHIFT_AUTH_PROVIDER` | `mock` | Auth provider: `mock` or `steam` |
+| `RULESHIFT_STEAM_APP_ID` | empty | Steam app id, required when `RULESHIFT_AUTH_PROVIDER=steam` |
+| `RULESHIFT_STEAM_WEB_API_KEY` | empty | Server-only Steam Web API key, required by the Steam provider |
 | `RULESHIFT_MAX_MESSAGE_BYTES` | `65536` | Max protobuf WebSocket payload size |
 | `RULESHIFT_ROOM_INPUT_QUEUE_SIZE` | `1024` | Bounded per-room command queue size |
 | `RULESHIFT_SESSION_SEND_QUEUE_SIZE` | `256` | Bounded per-session send queue size |
@@ -92,6 +95,15 @@ Environment variables:
 | `RULESHIFT_WRITE_TIMEOUT` | `30s` | HTTP write timeout |
 | `RULESHIFT_ENABLE_METRICS` | `true` | Future `/metrics` toggle |
 | `RULESHIFT_ENABLE_PPROF` | `false` | Future pprof toggle |
+
+Steam mode keeps the Web API key on the Go server only:
+
+```powershell
+$env:RULESHIFT_AUTH_PROVIDER="steam"
+$env:RULESHIFT_STEAM_APP_ID="480"
+$env:RULESHIFT_STEAM_WEB_API_KEY="<server-only-secret>"
+go run ./cmd/gateway
+```
 
 ## Protocol Direction
 

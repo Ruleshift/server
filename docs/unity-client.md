@@ -25,4 +25,8 @@ Planned dependencies:
 
 Generated protobuf files will be placed in `unity-client/Assets/Scripts/Network/Generated`.
 
+## Steam Auth
+
+For production Steam auth, Unity should obtain a Steam auth session ticket from Steamworks.NET or another Steamworks bridge and send only that ticket in `AuthRequest.ticket`. The Steam Web API key stays on the Go gateway in `RULESHIFT_STEAM_WEB_API_KEY`; it must never be included in Unity code or client configuration.
+
 

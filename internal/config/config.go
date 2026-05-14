@@ -4,12 +4,15 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
 type Config struct {
 	Addr                 string
 	Env                  string
+	AuthProvider         string
+	SteamAppID           string
 	MaxMessageBytes      int
 	RoomInputQueueSize   int
 	SessionSendQueueSize int
@@ -24,6 +27,8 @@ func Load() (Config, error) {
 	cfg := Config{
 		Addr:                 envString("RULESHIFT_ADDR", ":8080"),
 		Env:                  envString("RULESHIFT_ENV", "dev"),
+		AuthProvider:         envString("RULESHIFT_AUTH_PROVIDER", "mock"),
+		SteamAppID:           envString("RULESHIFT_STEAM_APP_ID", ""),
 		MaxMessageBytes:      64 * 1024,
 		RoomInputQueueSize:   1024,
 		SessionSendQueueSize: 256,
@@ -60,6 +65,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	cfg.AuthProvider = strings.ToLower(strings.TrimSpace(cfg.AuthProvider))
+	cfg.SteamAppID = strings.TrimSpace(cfg.SteamAppID)
+
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -69,6 +77,15 @@ func Load() (Config, error) {
 func (c Config) Validate() error {
 	if c.Addr == "" {
 		return fmt.Errorf("RULESHIFT_ADDR must not be empty")
+	}
+	switch c.AuthProvider {
+	case "mock":
+	case "steam":
+		if c.SteamAppID == "" {
+			return fmt.Errorf("RULESHIFT_STEAM_APP_ID must not be empty when RULESHIFT_AUTH_PROVIDER=steam")
+		}
+	default:
+		return fmt.Errorf("RULESHIFT_AUTH_PROVIDER must be mock or steam")
 	}
 	if c.MaxMessageBytes <= 0 {
 		return fmt.Errorf("RULESHIFT_MAX_MESSAGE_BYTES must be positive")
