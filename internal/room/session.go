@@ -11,6 +11,7 @@ const (
 	CloseReasonSlowConsumer = "slow_consumer"
 	CloseReasonShutdown     = "shutdown"
 	CloseReasonReplaced     = "replaced"
+	CloseReasonDisconnected = "disconnected"
 )
 
 var (

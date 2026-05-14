@@ -86,7 +86,18 @@ Clients keep `last_seen_revision`. On join/resume the server compares it with cu
 
 ### Event Log And Replay
 
-Replay is planned to demonstrate event-sourcing-style recovery. The current skeleton includes delta replay helpers; phase 8 will add append-only room events and an in-memory event store.
+Room runtimes can write append-only `RoomEvent` records to an `EventStore`. The MVP includes `InMemoryEventStore`, which assigns a monotonic sequence number at append time and returns room-filtered copies for replay.
+
+Event types are:
+
+- `RoomCreated`
+- `PlayerJoined`
+- `IntAdded`
+- `IntSet`
+- `SnapshotSent`
+- `PlayerDisconnected`
+
+Replay starts from `RoomCreated`, applies only mutating integer events (`IntAdded` and `IntSet`), and treats join, snapshot, and disconnect events as audit trail entries. This restores the authoritative `RoomState` value and revision without trusting client state. The current implementation is intentionally in-memory for interview clarity; a file-backed or durable store can be added behind the same `EventStore` interface later.
 
 ## Non-Goals For MVP
 

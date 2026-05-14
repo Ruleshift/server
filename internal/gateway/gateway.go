@@ -130,7 +130,15 @@ func (g *Gateway) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	state.session.Close(room.CloseReasonShutdown)
+	if state.room != nil {
+		leaveCtx, leaveCancel := context.WithTimeout(context.Background(), time.Second)
+		if err := state.room.Leave(leaveCtx, state.session, room.CloseReasonDisconnected); err != nil && !errors.Is(err, room.ErrRuntimeClosed) {
+			g.logger.Debug("leave room", "room_id", state.roomID, "error", err)
+		}
+		leaveCancel()
+	}
+
+	state.session.Close(room.CloseReasonDisconnected)
 	cancel()
 	select {
 	case <-writerDone:
@@ -237,7 +245,10 @@ func (g *Gateway) handleJoinRoom(ctx context.Context, state *connectionState, pa
 		return err
 	}
 	if payload.GetLastSeenRevision() != snapshot.Revision {
-		return g.send(ctx, state.session, room.SnapshotEnvelope(snapshot))
+		if err := g.send(ctx, state.session, room.SnapshotEnvelope(snapshot)); err != nil {
+			return err
+		}
+		return state.room.RecordSnapshotSent(ctx, state.identity.PlayerID)
 	}
 	return nil
 }
@@ -276,7 +287,10 @@ func (g *Gateway) handleSnapshotRequest(ctx context.Context, state *connectionSt
 	if err != nil {
 		return fmt.Errorf("room snapshot: %w", err)
 	}
-	return g.send(ctx, state.session, room.SnapshotEnvelope(snapshot))
+	if err := g.send(ctx, state.session, room.SnapshotEnvelope(snapshot)); err != nil {
+		return err
+	}
+	return state.room.RecordSnapshotSent(ctx, state.identity.PlayerID)
 }
 
 func (g *Gateway) writeLoop(ctx context.Context, conn *websocket.Conn, session *websocketSession, done chan<- error) {

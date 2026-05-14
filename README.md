@@ -36,6 +36,7 @@ Implemented in this iteration:
 - Gateway-owned websocket sessions implement `room.PlayerSink` with bounded outbound queues, non-blocking send, snapshot compaction for lagging clients, repeated slow-consumer disconnects, and graceful shutdown close.
 - WebSocket gateway on `/ws` using Gorilla WebSocket with binary protobuf envelopes, mock auth, join room, snapshots, Add/Set commands, delta broadcast, app-level ping/pong, and basic client sequence checks.
 - Reconnect/resume for rooms: `JoinRoomRequest.last_seen_revision` is compared with the authoritative room revision, stale clients receive a `StateSnapshot`, and reconnecting with the same authenticated `player_id` replaces the old session.
+- Append-only room event log with sequence-numbered `RoomEvent` records, `InMemoryEventStore`, and replay that restores integer state from Add/Set events.
 - Protobuf schema in `internal/protocol/proto/ruleshift.proto`.
 - Generated Go and C# protobuf bindings.
 - Direct protobuf encode/decode through generated Go and C# bindings.
@@ -133,6 +134,7 @@ Ruleshift is meant to show:
 - bounded queues and backpressure;
 - cross-language protobuf protocol design;
 - reconnect and revision-based state recovery;
+- append-only event logs and replay;
 - observability and load-test thinking;
 - clean package boundaries for a future domain layer.
 
