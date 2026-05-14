@@ -4,14 +4,19 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	ruleshiftv1 "github.com/Ruleshift/server/internal/protocol/generated/go/ruleshiftv1"
 	"github.com/Ruleshift/server/internal/room"
 )
 
+var nextWebSocketSessionID atomic.Uint64
+
 type websocketSession struct {
+	sessionID   uint64
 	playerID    string
 	send        chan *ruleshiftv1.ServerEnvelope
+	done        chan struct{}
 	mu          sync.Mutex
 	closed      bool
 	closeReason string
@@ -21,7 +26,15 @@ func newWebSocketSession(sendQueueSize int) (*websocketSession, error) {
 	if sendQueueSize <= 0 {
 		return nil, fmt.Errorf("session send queue size must be positive")
 	}
-	return &websocketSession{send: make(chan *ruleshiftv1.ServerEnvelope, sendQueueSize)}, nil
+	return &websocketSession{
+		sessionID: nextWebSocketSessionID.Add(1),
+		send:      make(chan *ruleshiftv1.ServerEnvelope, sendQueueSize),
+		done:      make(chan struct{}),
+	}, nil
+}
+
+func (s *websocketSession) SessionID() uint64 {
+	return s.sessionID
 }
 
 func (s *websocketSession) Bind(playerID string) error {
@@ -79,10 +92,15 @@ func (s *websocketSession) Close(reason string) {
 	s.closed = true
 	s.closeReason = reason
 	close(s.send)
+	close(s.done)
 }
 
 func (s *websocketSession) Outbound() <-chan *ruleshiftv1.ServerEnvelope {
 	return s.send
+}
+
+func (s *websocketSession) Done() <-chan struct{} {
+	return s.done
 }
 
 func (s *websocketSession) IsClosed() bool {

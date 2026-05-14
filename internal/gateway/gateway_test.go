@@ -74,6 +74,39 @@ func TestGatewayAuthJoinAndBroadcastDelta(t *testing.T) {
 	}
 }
 
+func TestGatewayJoinAtCurrentRevisionSkipsSnapshot(t *testing.T) {
+	server, _ := newTestGatewayServer(t)
+	defer server.Close()
+
+	client := dialTestWebSocket(t, server.URL)
+	defer client.Close()
+
+	client.Send(t, authEnvelope(1, "player-1"))
+	if client.Read(t).GetAuthOk() == nil {
+		t.Fatalf("auth response payload = nil, want AuthOk")
+	}
+
+	client.Send(t, joinEnvelopeWithLastSeen(2, "room-1", 0))
+	join := client.Read(t).GetJoinRoomOk()
+	if join == nil {
+		t.Fatalf("join response payload = nil, want JoinRoomOk")
+	}
+	if join.GetCurrentRevision() != 0 {
+		t.Fatalf("join revision = %d, want 0", join.GetCurrentRevision())
+	}
+
+	client.Send(t, &ruleshiftv1.ClientEnvelope{
+		ProtocolVersion: protocol.CurrentVersion,
+		ClientSequence:  3,
+		Payload: &ruleshiftv1.ClientEnvelope_Ping{
+			Ping: &ruleshiftv1.Ping{ClientTimeUnixMs: 123},
+		},
+	})
+	if pong := client.Read(t).GetPong(); pong == nil {
+		t.Fatalf("payload = nil, want Pong; a stale queued snapshot would be read first here")
+	}
+}
+
 func TestGatewayNewClientReceivesSnapshotAfterStateChange(t *testing.T) {
 	server, _ := newTestGatewayServer(t)
 	defer server.Close()
@@ -118,6 +151,86 @@ func TestGatewayNewClientReceivesSnapshotAfterStateChange(t *testing.T) {
 	}
 	if snapshot.GetValue() != 42 || snapshot.GetRevision() != 1 {
 		t.Fatalf("snapshot = value %d revision %d, want 42/1", snapshot.GetValue(), snapshot.GetRevision())
+	}
+}
+
+func TestGatewayReconnectReplacesOldSessionAndSendsSnapshot(t *testing.T) {
+	server, _ := newTestGatewayServer(t)
+	defer server.Close()
+
+	oldConnection := dialTestWebSocket(t, server.URL)
+	defer oldConnection.Close()
+
+	authAndJoin(t, oldConnection, "player-1", "room-1")
+	oldConnection.Send(t, &ruleshiftv1.ClientEnvelope{
+		ProtocolVersion: protocol.CurrentVersion,
+		ClientSequence:  3,
+		Payload: &ruleshiftv1.ClientEnvelope_IntCommand{
+			IntCommand: &ruleshiftv1.IntCommand{
+				RoomId:    "room-1",
+				Operation: ruleshiftv1.IntOperation_INT_OPERATION_ADD,
+				Value:     7,
+			},
+		},
+	})
+	originalDelta := readDelta(t, oldConnection)
+	if originalDelta.GetNewValue() != 7 || originalDelta.GetNewRevision() != 1 {
+		t.Fatalf("delta = value %d revision %d, want 7/1", originalDelta.GetNewValue(), originalDelta.GetNewRevision())
+	}
+
+	resumedConnection := dialTestWebSocket(t, server.URL)
+	defer resumedConnection.Close()
+
+	resumedConnection.Send(t, authEnvelope(1, "player-1"))
+	authOk := resumedConnection.Read(t).GetAuthOk()
+	if authOk == nil {
+		t.Fatalf("resume auth response payload = nil, want AuthOk")
+	}
+
+	resumedConnection.Send(t, joinEnvelopeWithLastSeen(2, "room-1", 0))
+	join := resumedConnection.Read(t).GetJoinRoomOk()
+	if join == nil {
+		t.Fatalf("resume join response payload = nil, want JoinRoomOk")
+	}
+	if join.GetCurrentRevision() != 1 {
+		t.Fatalf("resume join revision = %d, want 1", join.GetCurrentRevision())
+	}
+
+	snapshot := resumedConnection.Read(t).GetStateSnapshot()
+	if snapshot == nil {
+		t.Fatalf("resume payload = nil, want StateSnapshot")
+	}
+	if snapshot.GetValue() != 7 || snapshot.GetRevision() != 1 {
+		t.Fatalf("resume snapshot = value %d revision %d, want 7/1", snapshot.GetValue(), snapshot.GetRevision())
+	}
+
+	oldConnection.ExpectClosed(t)
+	_ = oldConnection.Write(&ruleshiftv1.ClientEnvelope{
+		ProtocolVersion: protocol.CurrentVersion,
+		ClientSequence:  4,
+		Payload: &ruleshiftv1.ClientEnvelope_IntCommand{
+			IntCommand: &ruleshiftv1.IntCommand{
+				RoomId:    "room-1",
+				Operation: ruleshiftv1.IntOperation_INT_OPERATION_ADD,
+				Value:     100,
+			},
+		},
+	})
+
+	resumedConnection.Send(t, &ruleshiftv1.ClientEnvelope{
+		ProtocolVersion: protocol.CurrentVersion,
+		ClientSequence:  3,
+		Payload: &ruleshiftv1.ClientEnvelope_IntCommand{
+			IntCommand: &ruleshiftv1.IntCommand{
+				RoomId:    "room-1",
+				Operation: ruleshiftv1.IntOperation_INT_OPERATION_ADD,
+				Value:     2,
+			},
+		},
+	})
+	resumedDelta := readDelta(t, resumedConnection)
+	if resumedDelta.GetNewValue() != 9 || resumedDelta.GetNewRevision() != 2 {
+		t.Fatalf("resumed delta = value %d revision %d, want 9/2", resumedDelta.GetNewValue(), resumedDelta.GetNewRevision())
 	}
 }
 
@@ -187,13 +300,6 @@ func authAndJoin(t *testing.T, client *testWebSocketClient, playerID string, roo
 	if join.GetRoomId() != roomID {
 		t.Fatalf("join room = %q, want %q", join.GetRoomId(), roomID)
 	}
-	snapshot := client.Read(t).GetStateSnapshot()
-	if snapshot == nil {
-		t.Fatalf("snapshot payload = nil, want StateSnapshot")
-	}
-	if snapshot.GetRoomId() != roomID {
-		t.Fatalf("snapshot room = %q, want %q", snapshot.GetRoomId(), roomID)
-	}
 }
 
 func authEnvelope(sequence uint64, playerID string) *ruleshiftv1.ClientEnvelope {
@@ -207,11 +313,18 @@ func authEnvelope(sequence uint64, playerID string) *ruleshiftv1.ClientEnvelope 
 }
 
 func joinEnvelope(sequence uint64, roomID string) *ruleshiftv1.ClientEnvelope {
+	return joinEnvelopeWithLastSeen(sequence, roomID, 0)
+}
+
+func joinEnvelopeWithLastSeen(sequence uint64, roomID string, lastSeenRevision uint64) *ruleshiftv1.ClientEnvelope {
 	return &ruleshiftv1.ClientEnvelope{
 		ProtocolVersion: protocol.CurrentVersion,
 		ClientSequence:  sequence,
 		Payload: &ruleshiftv1.ClientEnvelope_JoinRoom{
-			JoinRoom: &ruleshiftv1.JoinRoomRequest{RoomId: roomID},
+			JoinRoom: &ruleshiftv1.JoinRoomRequest{
+				RoomId:           roomID,
+				LastSeenRevision: lastSeenRevision,
+			},
 		},
 	}
 }
@@ -255,13 +368,17 @@ func dialTestWebSocket(t *testing.T, rawURL string) *testWebSocketClient {
 func (c *testWebSocketClient) Send(t *testing.T, env *ruleshiftv1.ClientEnvelope) {
 	t.Helper()
 
-	payload, err := protocol.EncodeClientEnvelope(env)
-	if err != nil {
-		t.Fatalf("encode client envelope: %v", err)
-	}
-	if err := c.conn.WriteMessage(websocket.BinaryMessage, payload); err != nil {
+	if err := c.Write(env); err != nil {
 		t.Fatalf("write websocket frame: %v", err)
 	}
+}
+
+func (c *testWebSocketClient) Write(env *ruleshiftv1.ClientEnvelope) error {
+	payload, err := protocol.EncodeClientEnvelope(env)
+	if err != nil {
+		return err
+	}
+	return c.conn.WriteMessage(websocket.BinaryMessage, payload)
 }
 
 func (c *testWebSocketClient) Read(t *testing.T) *ruleshiftv1.ServerEnvelope {
@@ -287,4 +404,16 @@ func (c *testWebSocketClient) Read(t *testing.T) *ruleshiftv1.ServerEnvelope {
 
 func (c *testWebSocketClient) Close() {
 	_ = c.conn.Close()
+}
+
+func (c *testWebSocketClient) ExpectClosed(t *testing.T) {
+	t.Helper()
+
+	if err := c.conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	_, _, err := c.conn.ReadMessage()
+	if err == nil {
+		t.Fatal("read websocket frame succeeded, want closed connection")
+	}
 }

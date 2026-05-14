@@ -36,6 +36,15 @@ Room state is:
 
 Every accepted command increments revision by exactly one. Clients observe ordered deltas or a recovery snapshot.
 
+## Join And Resume
+
+`JoinRoomRequest.last_seen_revision` lets a client resume from its last applied room revision. The server compares that value with the authoritative room revision:
+
+- if the revisions match, the server sends `JoinRoomOk` only;
+- if the revisions differ, the server sends `JoinRoomOk` followed by a `StateSnapshot`.
+
+The MVP does not keep a delta history ring buffer, so snapshot recovery is the only catch-up path. Reconnecting with the same authenticated `player_id` replaces the previous session, closes its outbound stream, and prevents commands from the old session from mutating room state.
+
 ## Generation Plan
 
 Install:
@@ -77,6 +86,7 @@ Oversized WebSocket frames are rejected by the transport. Malformed protobuf pay
 - unexpected payload for the connection state;
 - empty room IDs or auth tickets;
 - invalid integer operation;
+- stale replaced sessions;
 - stale or mismatched room revisions.
 
 

@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -272,6 +273,62 @@ func TestRoomRuntimeShutdownClosesJoinedSessions(t *testing.T) {
 	}
 }
 
+func TestRoomRuntimeReplacesSessionAndIgnoresOldCommands(t *testing.T) {
+	runtime, cancel, done := startTestRuntime(t)
+	defer stopTestRuntime(t, cancel, done)
+
+	oldSession := newCollectingSink("player-1")
+	newSession := newCollectingSink("player-1")
+
+	ctx, cancelCtx := context.WithTimeout(context.Background(), time.Second)
+	defer cancelCtx()
+
+	if _, err := runtime.Join(ctx, oldSession); err != nil {
+		t.Fatalf("join old session returned error: %v", err)
+	}
+	if _, err := runtime.Join(ctx, newSession); err != nil {
+		t.Fatalf("join new session returned error: %v", err)
+	}
+
+	if !oldSession.IsClosed() {
+		t.Fatal("old session is open, want closed after replacement")
+	}
+	if oldSession.CloseReason() != CloseReasonReplaced {
+		t.Fatalf("old close reason = %q, want %q", oldSession.CloseReason(), CloseReasonReplaced)
+	}
+
+	_, err := runtime.SubmitFrom(ctx, oldSession, IntCommand{
+		RoomID:    "room-1",
+		PlayerID:  "player-1",
+		Operation: OperationAdd,
+		Value:     10,
+	})
+	if !errors.Is(err, ErrStalePlayerSession) {
+		t.Fatalf("old SubmitFrom error = %v, want ErrStalePlayerSession", err)
+	}
+
+	result, err := runtime.SubmitFrom(ctx, newSession, IntCommand{
+		RoomID:    "room-1",
+		PlayerID:  "player-1",
+		Operation: OperationAdd,
+		Value:     3,
+	})
+	if err != nil {
+		t.Fatalf("new SubmitFrom returned error: %v", err)
+	}
+	if result.Snapshot.Value != 3 || result.Snapshot.Revision != 1 {
+		t.Fatalf("snapshot = value %d revision %d, want 3/1", result.Snapshot.Value, result.Snapshot.Revision)
+	}
+
+	snapshot, err := runtime.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("Snapshot returned error: %v", err)
+	}
+	if snapshot.Value != 3 || snapshot.Revision != 1 {
+		t.Fatalf("runtime snapshot = value %d revision %d, want 3/1", snapshot.Value, snapshot.Revision)
+	}
+}
+
 func startTestRuntime(t *testing.T) (*RoomRuntime, context.CancelFunc, <-chan error) {
 	t.Helper()
 
@@ -310,6 +367,7 @@ func stopTestRuntime(t *testing.T, cancel context.CancelFunc, done <-chan error)
 }
 
 type collectingSink struct {
+	sessionID   uint64
 	playerID    string
 	mu          sync.Mutex
 	received    []StateDelta
@@ -318,7 +376,11 @@ type collectingSink struct {
 }
 
 func newCollectingSink(playerID string) *collectingSink {
-	return &collectingSink{playerID: playerID}
+	return &collectingSink{sessionID: nextTestSessionID(), playerID: playerID}
+}
+
+func (s *collectingSink) SessionID() uint64 {
+	return s.sessionID
 }
 
 func (s *collectingSink) PlayerID() string {
@@ -351,6 +413,12 @@ func (s *collectingSink) IsClosed() bool {
 	return s.closed
 }
 
+func (s *collectingSink) CloseReason() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closeReason
+}
+
 func (s *collectingSink) Close(reason string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -368,6 +436,7 @@ func (s *collectingSink) deltas() []StateDelta {
 }
 
 type boundedTestSink struct {
+	sessionID   uint64
 	playerID    string
 	capacity    int
 	mu          sync.Mutex
@@ -378,14 +447,25 @@ type boundedTestSink struct {
 
 func newBoundedTestSink(playerID string, capacity int) *boundedTestSink {
 	return &boundedTestSink{
-		playerID: playerID,
-		capacity: capacity,
-		queue:    make([]*ruleshiftv1.ServerEnvelope, 0, capacity),
+		sessionID: nextTestSessionID(),
+		playerID:  playerID,
+		capacity:  capacity,
+		queue:     make([]*ruleshiftv1.ServerEnvelope, 0, capacity),
 	}
+}
+
+func (s *boundedTestSink) SessionID() uint64 {
+	return s.sessionID
 }
 
 func (s *boundedTestSink) PlayerID() string {
 	return s.playerID
+}
+
+var testSessionID atomic.Uint64
+
+func nextTestSessionID() uint64 {
+	return testSessionID.Add(1)
 }
 
 func (s *boundedTestSink) Send(ctx context.Context, msg *ruleshiftv1.ServerEnvelope) error {

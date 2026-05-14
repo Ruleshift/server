@@ -19,6 +19,7 @@ var (
 )
 
 type PlayerSink interface {
+	SessionID() uint64
 	PlayerID() string
 	Send(ctx context.Context, msg *ruleshiftv1.ServerEnvelope) error
 	Close(reason string)

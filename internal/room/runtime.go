@@ -10,6 +10,7 @@ import (
 
 var ErrNilPlayerSink = errors.New("player sink must not be nil")
 var ErrRuntimeClosed = errors.New("room runtime is closed")
+var ErrStalePlayerSession = errors.New("player session is no longer current")
 
 type RuntimeConfig struct {
 	InputQueueSize          int
@@ -18,6 +19,7 @@ type RuntimeConfig struct {
 
 type RuntimeCommand struct {
 	Command      IntCommand
+	CommandSink  PlayerSink
 	SnapshotOnly bool
 	JoinSink     PlayerSink
 	Reply        chan<- CommandResult
@@ -72,12 +74,23 @@ func NewRuntime(roomID string, cfg RuntimeConfig) (*RoomRuntime, error) {
 }
 
 func (r *RoomRuntime) Submit(ctx context.Context, cmd IntCommand) (CommandResult, error) {
+	return r.submit(ctx, nil, cmd)
+}
+
+func (r *RoomRuntime) SubmitFrom(ctx context.Context, sink PlayerSink, cmd IntCommand) (CommandResult, error) {
+	if sink == nil {
+		return CommandResult{}, ErrNilPlayerSink
+	}
+	return r.submit(ctx, sink, cmd)
+}
+
+func (r *RoomRuntime) submit(ctx context.Context, sink PlayerSink, cmd IntCommand) (CommandResult, error) {
 	if r.isClosed() {
 		return CommandResult{}, ErrRuntimeClosed
 	}
 
 	reply := make(chan CommandResult, 1)
-	request := RuntimeCommand{Command: cmd, Reply: reply}
+	request := RuntimeCommand{Command: cmd, CommandSink: sink, Reply: reply}
 
 	select {
 	case r.input <- request:
@@ -171,6 +184,11 @@ func (r *RoomRuntime) Run(ctx context.Context) error {
 				continue
 			}
 
+			if err := r.validateCommandSink(request.CommandSink, request.Command.PlayerID); err != nil {
+				request.Reply <- CommandResult{Snapshot: BuildSnapshot(r.state), Err: err}
+				continue
+			}
+
 			next, delta, err := ApplyIntCommand(r.state, request.Command, r.clock())
 			outcome := broadcastOutcome{}
 			if err == nil {
@@ -199,12 +217,32 @@ func (r *RoomRuntime) join(sink PlayerSink) error {
 	if playerID == "" {
 		return ErrEmptyPlayerID
 	}
+	if sink.SessionID() == 0 {
+		return ErrStalePlayerSession
+	}
 
-	if previous := r.subscribers[playerID]; previous != nil && previous != sink {
+	if previous := r.subscribers[playerID]; previous != nil && previous.SessionID() != sink.SessionID() {
 		previous.Close(CloseReasonReplaced)
 	}
 	r.subscribers[playerID] = sink
 	r.slowStrikes[playerID] = 0
+	return nil
+}
+
+func (r *RoomRuntime) validateCommandSink(sink PlayerSink, playerID string) error {
+	if sink == nil {
+		return nil
+	}
+	if playerID == "" {
+		return ErrEmptyPlayerID
+	}
+	if sink.PlayerID() != playerID {
+		return ErrStalePlayerSession
+	}
+	current := r.subscribers[playerID]
+	if current == nil || current.SessionID() != sink.SessionID() {
+		return ErrStalePlayerSession
+	}
 	return nil
 }
 

@@ -32,7 +32,7 @@ Phase 5 gateway behavior:
 - WebSocket messages are binary;
 - binary payloads are protobuf envelopes serialized directly with the generated protobuf runtime;
 - `AuthRequest` must be the first client envelope;
-- `JoinRoomRequest` creates or joins a room and returns `JoinRoomOk` plus `StateSnapshot`;
+- `JoinRoomRequest` creates or joins a room and returns `JoinRoomOk`, followed by `StateSnapshot` only when the client's `last_seen_revision` differs from the current room revision;
 - `IntCommand` is submitted to the authoritative room runtime;
 - successful commands are broadcast as `StateDelta` to all joined sessions;
 - app-level `Ping` returns `Pong`;
@@ -67,7 +67,7 @@ Phase 3 behavior:
 
 Successful commands produce a monotonically increasing revision and a `StateDelta`. Joined clients are represented inside room logic by the small `PlayerSink` interface. The runtime sends the same protobuf envelope to every joined sink, keeping WebSocket implementation details out of room logic.
 
-Joining clients receive a `StateSnapshot`. Reconnect-specific resume behavior is planned for phase 7.
+Joining clients receive `JoinRoomOk`. They receive a `StateSnapshot` only when their `last_seen_revision` does not match the room's current revision. The MVP uses snapshots for recovery rather than replaying a per-room delta history.
 
 ### Backpressure
 
@@ -82,7 +82,7 @@ The WebSocket writer loop drains bounded session queues outside the room runtime
 
 ### Reconnect
 
-Clients keep `last_seen_revision`. On join/resume the server compares it with current room revision and sends a snapshot if needed. Session replacement is planned for phase 7.
+Clients keep `last_seen_revision`. On join/resume the server compares it with current room revision and sends a snapshot if needed. Reconnecting with the same authenticated `player_id` replaces the previous session, closes it with `replaced`, and room command submission checks the current session id before mutating state. The player id comes from the auth provider, not from client command payloads.
 
 ### Event Log And Replay
 

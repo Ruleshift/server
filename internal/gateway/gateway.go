@@ -92,6 +92,10 @@ func (g *Gateway) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	writerDone := make(chan error, 1)
 	go g.writeLoop(ctx, conn, session, writerDone)
+	go func() {
+		<-session.Done()
+		_ = conn.Close()
+	}()
 
 	state := connectionState{session: session}
 	authDeadlineCleared := false
@@ -232,7 +236,10 @@ func (g *Gateway) handleJoinRoom(ctx context.Context, state *connectionState, pa
 	if err := g.send(ctx, state.session, joinRoomOkEnvelope(payload.GetRoomId(), snapshot.Revision)); err != nil {
 		return err
 	}
-	return g.send(ctx, state.session, room.SnapshotEnvelope(snapshot))
+	if payload.GetLastSeenRevision() != snapshot.Revision {
+		return g.send(ctx, state.session, room.SnapshotEnvelope(snapshot))
+	}
+	return nil
 }
 
 func (g *Gateway) handleIntCommand(ctx context.Context, state *connectionState, payload *ruleshiftv1.IntCommand) error {
@@ -243,7 +250,7 @@ func (g *Gateway) handleIntCommand(ctx context.Context, state *connectionState, 
 		return g.send(ctx, state.session, errorEnvelope("wrong_room", "command room_id does not match joined room"))
 	}
 
-	_, err := state.room.Submit(ctx, room.IntCommand{
+	_, err := state.room.SubmitFrom(ctx, state.session, room.IntCommand{
 		RoomID:           payload.GetRoomId(),
 		PlayerID:         state.identity.PlayerID,
 		Operation:        toRoomOperation(payload.GetOperation()),
@@ -252,6 +259,9 @@ func (g *Gateway) handleIntCommand(ctx context.Context, state *connectionState, 
 		ReceivedAt:       time.Now().UTC(),
 	})
 	if err != nil {
+		if errors.Is(err, room.ErrStalePlayerSession) {
+			return nil
+		}
 		return g.send(ctx, state.session, errorEnvelope("command_rejected", err.Error()))
 	}
 	return nil
