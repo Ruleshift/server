@@ -4,8 +4,6 @@ The Unity client skeleton lives under `unity-client/Assets/Scripts/Network`.
 
 ## Dependencies
 
-Planned dependencies:
-
 - Google.Protobuf for generated C# messages.
 - NativeWebSocket installed through Unity Package Manager from `https://github.com/endel/NativeWebSocket.git#upm`.
 - Steamworks.NET or another Steamworks bridge for production Steam tickets.
@@ -20,6 +18,28 @@ Planned dependencies:
 6. Send `IntCommand` add/set operations.
 7. Apply `StateDelta` in revision order.
 8. Store `lastSeenRevision` for reconnect.
+
+## Skeleton Files
+
+- `MatchClient.cs` owns connection state, sends `AuthRequest`, `JoinRoomRequest`, Add/Set commands, applies snapshots/deltas, and keeps `LastSeenRevision` for `ReconnectAsync`.
+- `ProtocolCodec.cs` serializes `ClientEnvelope` and deserializes `ServerEnvelope` with Google.Protobuf. WebSocket sends raw protobuf bytes; the codec also includes length-prefix helpers for future transports that do not preserve message boundaries.
+- `MockAuthProvider.cs` returns `mock:player-1` style tickets for the Go mock provider. Replace it with Steamworks.NET or another Steamworks bridge in production.
+
+## Minimal Usage
+
+```csharp
+var client = new MatchClient();
+var auth = new MockAuthProvider("player-1");
+
+await client.ConnectAsync(new Uri("ws://localhost:8080/ws"), cancellationToken);
+await client.SendAuthRequestAsync(auth.GetTicket(), cancellationToken);
+await client.JoinRoomAsync("room-1", cancellationToken);
+await client.SendAddAsync(5, cancellationToken);
+await client.SendSetAsync(42, cancellationToken);
+
+// Later, after a transport drop, this rejoins with the stored LastSeenRevision.
+await client.ReconnectAsync(new Uri("ws://localhost:8080/ws"), auth.GetTicket(), cancellationToken);
+```
 
 `MatchClient` uses NativeWebSocket for transport. Call `DispatchMessageQueue()` from a Unity `Update()` loop so NativeWebSocket can deliver queued messages on non-WebGL builds.
 

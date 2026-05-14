@@ -1,7 +1,6 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
-using Google.Protobuf;
 using NativeWebSocket;
 using Ruleshift.Protocol.V1;
 
@@ -9,12 +8,14 @@ namespace Ruleshift.Network
 {
     public sealed class MatchClient
     {
-        public const uint ProtocolVersion = 1;
+        public const uint ProtocolVersion = ProtocolCodec.ProtocolVersion;
 
         private readonly int _maxMessageBytes;
         private WebSocket _socket;
         private ulong _clientSequence;
         private ulong _lastSeenRevision;
+        private string _joinedRoomId;
+        private long _currentValue;
 
         public MatchClient(int maxMessageBytes = 65536)
         {
@@ -35,6 +36,8 @@ namespace Ruleshift.Network
         public event Action<Pong> PongReceived;
 
         public ulong LastSeenRevision => _lastSeenRevision;
+        public string JoinedRoomId => _joinedRoomId;
+        public long CurrentValue => _currentValue;
 
         public WebSocketState State => _socket?.State ?? WebSocketState.Closed;
 
@@ -53,8 +56,23 @@ namespace Ruleshift.Network
             _socket.OnClose += code => Closed?.Invoke(code);
             _socket.OnError += error => TransportError?.Invoke(error);
             _socket.OnMessage += HandleMessage;
+            _clientSequence = 0;
 
             await WaitForCancellation(_socket.Connect(), cancellationToken);
+        }
+
+        public async Task ReconnectAsync(Uri gatewayUri, string authTicket, string roomId, CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrWhiteSpace(roomId)) throw new ArgumentException("Room id must not be empty.", nameof(roomId));
+
+            await ConnectAsync(gatewayUri, cancellationToken);
+            await SendAuthRequestAsync(authTicket, cancellationToken);
+            await JoinRoomAsync(roomId, cancellationToken);
+        }
+
+        public Task ReconnectAsync(Uri gatewayUri, string authTicket, CancellationToken cancellationToken)
+        {
+            return ReconnectAsync(gatewayUri, authTicket, RequireJoinedRoom(), cancellationToken);
         }
 
         public Task SendAuthRequestAsync(string ticket, CancellationToken cancellationToken)
@@ -70,6 +88,7 @@ namespace Ruleshift.Network
         public Task JoinRoomAsync(string roomId, CancellationToken cancellationToken)
         {
             if (string.IsNullOrWhiteSpace(roomId)) throw new ArgumentException("Room id must not be empty.", nameof(roomId));
+            _joinedRoomId = roomId;
 
             return SendAsync(new ClientEnvelope
             {
@@ -86,9 +105,19 @@ namespace Ruleshift.Network
             return SendCommandAsync(roomId, IntOperation.Add, value, cancellationToken);
         }
 
+        public Task SendAddAsync(long value, CancellationToken cancellationToken)
+        {
+            return SendCommandAsync(RequireJoinedRoom(), IntOperation.Add, value, cancellationToken);
+        }
+
         public Task SendSetAsync(string roomId, long value, CancellationToken cancellationToken)
         {
             return SendCommandAsync(roomId, IntOperation.Set, value, cancellationToken);
+        }
+
+        public Task SendSetAsync(long value, CancellationToken cancellationToken)
+        {
+            return SendCommandAsync(RequireJoinedRoom(), IntOperation.Set, value, cancellationToken);
         }
 
         public Task RequestSnapshotAsync(string roomId, CancellationToken cancellationToken)
@@ -103,6 +132,11 @@ namespace Ruleshift.Network
                     LastSeenRevision = _lastSeenRevision,
                 },
             }, cancellationToken);
+        }
+
+        public Task RequestSnapshotAsync(CancellationToken cancellationToken)
+        {
+            return RequestSnapshotAsync(RequireJoinedRoom(), cancellationToken);
         }
 
         public Task SendPingAsync(long clientTimeUnixMs, CancellationToken cancellationToken)
@@ -132,13 +166,17 @@ namespace Ruleshift.Network
 
         public void ApplySnapshot(string roomId, long value, ulong revision)
         {
+            _joinedRoomId = roomId;
+            _currentValue = value;
             _lastSeenRevision = revision;
         }
 
         public void ApplyDelta(string roomId, long newValue, ulong newRevision)
         {
+            _joinedRoomId = roomId;
             if (newRevision > _lastSeenRevision)
             {
+                _currentValue = newValue;
                 _lastSeenRevision = newRevision;
             }
         }
@@ -154,6 +192,7 @@ namespace Ruleshift.Network
                     RoomId = roomId,
                     Operation = operation,
                     Value = value,
+                    ExpectedRevision = _lastSeenRevision,
                 },
             }, cancellationToken);
         }
@@ -166,12 +205,7 @@ namespace Ruleshift.Network
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            envelope.ProtocolVersion = ProtocolVersion;
-            envelope.ClientSequence = ++_clientSequence;
-
-            var payload = envelope.ToByteArray();
-            if (payload.Length > _maxMessageBytes) throw new InvalidOperationException("Client envelope exceeds max message size.");
-
+            var payload = ProtocolCodec.SerializeClientEnvelope(envelope, ++_clientSequence, _maxMessageBytes);
             await WaitForCancellation(_socket.Send(payload), cancellationToken);
         }
 
@@ -186,7 +220,7 @@ namespace Ruleshift.Network
             ServerEnvelope envelope;
             try
             {
-                envelope = ServerEnvelope.Parser.ParseFrom(payload);
+                envelope = ProtocolCodec.DeserializeServerEnvelope(payload, _maxMessageBytes);
             }
             catch (Exception ex)
             {
@@ -222,6 +256,16 @@ namespace Ruleshift.Network
                     PongReceived?.Invoke(envelope.Pong);
                     break;
             }
+        }
+
+        private string RequireJoinedRoom()
+        {
+            if (string.IsNullOrWhiteSpace(_joinedRoomId))
+            {
+                throw new InvalidOperationException("Join a room before sending room commands.");
+            }
+
+            return _joinedRoomId;
         }
 
         private static async Task WaitForCancellation(Task task, CancellationToken cancellationToken)
