@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using NativeWebSocket;
 using Ruleshift.Protocol.V1;
+using UnityEngine;
 
 namespace Ruleshift.Network
 {
@@ -16,6 +17,7 @@ namespace Ruleshift.Network
         private ulong _lastSeenRevision;
         private string _joinedRoomId;
         private long _currentValue;
+        private TaskCompletionSource<StateSnapshot> _pendingGetSnapshot;
 
         public MatchClient(int maxMessageBytes = 65536)
         {
@@ -139,6 +141,39 @@ namespace Ruleshift.Network
             return RequestSnapshotAsync(RequireJoinedRoom(), cancellationToken);
         }
 
+        public async Task<long> GetAsync(CancellationToken cancellationToken)
+        {
+            var roomId = RequireJoinedRoom();
+            var pending = BeginPendingGet();
+
+            using (cancellationToken.Register(() => pending.TrySetCanceled()))
+            {
+                try
+                {
+                    await RequestSnapshotAsync(roomId, cancellationToken);
+                    var snapshot = await pending.Task;
+                    Debug.Log($"Ruleshift current value: {snapshot.Value} (room={snapshot.RoomId}, revision={snapshot.Revision})");
+                    return snapshot.Value;
+                }
+                finally
+                {
+                    ClearPendingGet(pending);
+                }
+            }
+        }
+
+        public async void Get()
+        {
+            try
+            {
+                await GetAsync(CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError("Ruleshift Get failed: " + ex.Message);
+            }
+        }
+
         public Task SendPingAsync(long clientTimeUnixMs, CancellationToken cancellationToken)
         {
             return SendAsync(new ClientEnvelope
@@ -243,6 +278,7 @@ namespace Ruleshift.Network
                     break;
                 case ServerEnvelope.PayloadOneofCase.StateSnapshot:
                     ApplySnapshot(envelope.StateSnapshot.RoomId, envelope.StateSnapshot.Value, envelope.StateSnapshot.Revision);
+                    CompletePendingGet(envelope.StateSnapshot);
                     SnapshotReceived?.Invoke(envelope.StateSnapshot);
                     break;
                 case ServerEnvelope.PayloadOneofCase.StateDelta:
@@ -255,6 +291,37 @@ namespace Ruleshift.Network
                 case ServerEnvelope.PayloadOneofCase.Pong:
                     PongReceived?.Invoke(envelope.Pong);
                     break;
+            }
+        }
+
+        private TaskCompletionSource<StateSnapshot> BeginPendingGet()
+        {
+            if (_pendingGetSnapshot != null)
+            {
+                throw new InvalidOperationException("A Get request is already waiting for a snapshot.");
+            }
+
+            _pendingGetSnapshot = new TaskCompletionSource<StateSnapshot>();
+            return _pendingGetSnapshot;
+        }
+
+        private void CompletePendingGet(StateSnapshot snapshot)
+        {
+            var pending = _pendingGetSnapshot;
+            if (pending == null)
+            {
+                return;
+            }
+
+            _pendingGetSnapshot = null;
+            pending.TrySetResult(snapshot);
+        }
+
+        private void ClearPendingGet(TaskCompletionSource<StateSnapshot> pending)
+        {
+            if (ReferenceEquals(_pendingGetSnapshot, pending))
+            {
+                _pendingGetSnapshot = null;
             }
         }
 

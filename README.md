@@ -29,6 +29,7 @@ Implemented in this iteration:
 
 - Go module and reviewable project skeleton.
 - `cmd/gateway` entrypoint with config loading, structured logging, `/healthz`, and `/ws`.
+- `cmd/client` CLI client for manual protobuf WebSocket testing from a terminal.
 - `cmd/botload` entrypoint with planned load-test flags.
 - Auth interfaces with local mock provider and Steam Web API provider skeleton.
 - Authoritative room state with `int64` value, monotonic `uint64` revision, Add/Set command apply logic, snapshots, deltas, and registry.
@@ -77,6 +78,19 @@ WebSocket endpoint:
 ```text
 ws://localhost:8080/ws
 ```
+
+Manual CLI checks:
+
+```powershell
+go run ./cmd/client -addr ws://localhost:8080/ws -ticket mock:player-1 -room demo -op get
+go run ./cmd/client -addr ws://localhost:8080/ws -ticket mock:player-1 -room demo -op add -value 5
+go run ./cmd/client -addr ws://localhost:8080/ws -ticket mock:player-2 -room demo -op set -value 42
+go run ./cmd/client -addr ws://localhost:8080/ws -ticket mock:watcher -room demo -op watch
+```
+
+For a LAN server started with `RULESHIFT_ADDR=0.0.0.0:8080`, replace `localhost` with the server IPv4 address, for example `ws://192.168.1.50:8080/ws`.
+
+More examples: [docs/cli-client.md](docs/cli-client.md).
 
 ## Configuration
 
