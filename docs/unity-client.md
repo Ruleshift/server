@@ -7,7 +7,7 @@ The Unity client skeleton lives under `unity-client/Assets/Scripts/Network`.
 Planned dependencies:
 
 - Google.Protobuf for generated C# messages.
-- ClientWebSocket or a Unity-compatible WebSocket package.
+- NativeWebSocket installed through Unity Package Manager from `https://github.com/endel/NativeWebSocket.git#upm`.
 - Steamworks.NET or another Steamworks bridge for production Steam tickets.
 
 ## Flow
@@ -20,6 +20,8 @@ Planned dependencies:
 6. Send `IntCommand` add/set operations.
 7. Apply `StateDelta` in revision order.
 8. Store `lastSeenRevision` for reconnect.
+
+`MatchClient` uses NativeWebSocket for transport. Call `DispatchMessageQueue()` from a Unity `Update()` loop so NativeWebSocket can deliver queued messages on non-WebGL builds.
 
 Generated protobuf files will be placed in `unity-client/Assets/Scripts/Network/Generated`.
 

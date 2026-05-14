@@ -1,147 +1,57 @@
 package room
 
 import (
+	"context"
 	"errors"
-	"fmt"
-	"sync"
+
+	ruleshiftv1 "github.com/Ruleshift/server/internal/protocol/generated/go/ruleshiftv1"
+)
+
+const (
+	CloseReasonSlowConsumer = "slow_consumer"
+	CloseReasonShutdown     = "shutdown"
+	CloseReasonReplaced     = "replaced"
 )
 
 var (
-	ErrSessionQueueFull = errors.New("session send queue is full")
-	ErrSessionClosed    = errors.New("session is closed")
+	ErrPlayerSinkFull   = errors.New("player sink send queue is full")
+	ErrPlayerSinkClosed = errors.New("player sink is closed")
 )
 
-type CloseReason string
-
-const (
-	CloseReasonSlowConsumer CloseReason = "slow_consumer"
-	CloseReasonShutdown     CloseReason = "shutdown"
-	CloseReasonReplaced     CloseReason = "replaced"
-)
-
-type MessageKind uint8
-
-const (
-	MessageKindUnspecified MessageKind = iota
-	MessageKindStateDelta
-	MessageKindStateSnapshot
-)
-
-type RoomMessage struct {
-	Kind     MessageKind
-	Delta    StateDelta
-	Snapshot StateSnapshot
-}
-
-type PlayerSession interface {
+type PlayerSink interface {
 	PlayerID() string
-	TrySend(message RoomMessage) error
-	TrySendSnapshot(snapshot StateSnapshot) error
-	IsClosed() bool
-	Close(reason CloseReason)
+	Send(ctx context.Context, msg *ruleshiftv1.ServerEnvelope) error
+	Close(reason string)
 }
 
-type BoundedPlayerSession struct {
-	playerID    string
-	outbound    chan RoomMessage
-	mu          sync.Mutex
-	closed      bool
-	closeReason CloseReason
+func SnapshotEnvelope(snapshot StateSnapshot) *ruleshiftv1.ServerEnvelope {
+	return &ruleshiftv1.ServerEnvelope{Payload: &ruleshiftv1.ServerEnvelope_StateSnapshot{StateSnapshot: &ruleshiftv1.StateSnapshot{
+		RoomId:   snapshot.RoomID,
+		Value:    snapshot.Value,
+		Revision: snapshot.Revision,
+	}}}
 }
 
-func NewBoundedPlayerSession(playerID string, sendQueueSize int) (*BoundedPlayerSession, error) {
-	if playerID == "" {
-		return nil, ErrEmptyPlayerID
-	}
-	if sendQueueSize <= 0 {
-		return nil, fmt.Errorf("session send queue size must be positive")
-	}
-
-	return &BoundedPlayerSession{
-		playerID: playerID,
-		outbound: make(chan RoomMessage, sendQueueSize),
-	}, nil
+func DeltaEnvelope(delta StateDelta) *ruleshiftv1.ServerEnvelope {
+	return &ruleshiftv1.ServerEnvelope{Payload: &ruleshiftv1.ServerEnvelope_StateDelta{StateDelta: &ruleshiftv1.StateDelta{
+		RoomId:            delta.RoomID,
+		PreviousValue:     delta.PreviousValue,
+		NewValue:          delta.NewValue,
+		PreviousRevision:  delta.PreviousRevision,
+		NewRevision:       delta.NewRevision,
+		ChangedByPlayerId: delta.ChangedByPlayerID,
+		Operation:         FromOperation(delta.Operation),
+		Operand:           delta.Operand,
+	}}}
 }
 
-func (s *BoundedPlayerSession) PlayerID() string {
-	return s.playerID
-}
-
-func (s *BoundedPlayerSession) TrySend(message RoomMessage) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.closed {
-		return ErrSessionClosed
-	}
-
-	select {
-	case s.outbound <- message:
-		return nil
+func FromOperation(operation Operation) ruleshiftv1.IntOperation {
+	switch operation {
+	case OperationAdd:
+		return ruleshiftv1.IntOperation_INT_OPERATION_ADD
+	case OperationSet:
+		return ruleshiftv1.IntOperation_INT_OPERATION_SET
 	default:
-		return ErrSessionQueueFull
+		return ruleshiftv1.IntOperation_INT_OPERATION_UNSPECIFIED
 	}
-}
-
-func (s *BoundedPlayerSession) TrySendSnapshot(snapshot StateSnapshot) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.closed {
-		return ErrSessionClosed
-	}
-
-	for {
-		select {
-		case <-s.outbound:
-			continue
-		default:
-		}
-		break
-	}
-
-	select {
-	case s.outbound <- RoomMessage{Kind: MessageKindStateSnapshot, Snapshot: snapshot}:
-		return nil
-	default:
-		return ErrSessionQueueFull
-	}
-}
-
-func (s *BoundedPlayerSession) IsClosed() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.closed
-}
-
-func (s *BoundedPlayerSession) Close(reason CloseReason) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.closed {
-		return
-	}
-	s.closed = true
-	s.closeReason = reason
-	close(s.outbound)
-}
-
-func (s *BoundedPlayerSession) CloseReason() CloseReason {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.closeReason
-}
-
-func (s *BoundedPlayerSession) Outbound() <-chan RoomMessage {
-	return s.outbound
-}
-
-func (s *BoundedPlayerSession) QueueDepth() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.outbound)
-}
-
-func (s *BoundedPlayerSession) QueueCapacity() int {
-	return cap(s.outbound)
 }

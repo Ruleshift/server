@@ -1,95 +1,43 @@
 package protocol
 
 import (
-	"encoding/binary"
-	"errors"
 	"fmt"
 
+	ruleshiftv1 "github.com/Ruleshift/server/internal/protocol/generated/go/ruleshiftv1"
 	"google.golang.org/protobuf/proto"
 )
 
 const CurrentVersion uint32 = 1
 
-var (
-	ErrFrameTooLarge   = errors.New("frame payload exceeds max size")
-	ErrMalformedFrame  = errors.New("malformed frame")
-	ErrNilProtoMessage = errors.New("nil protobuf message")
-)
-
-type FrameCodec struct {
-	MaxMessageBytes uint32
+func EncodeClientEnvelope(env *ruleshiftv1.ClientEnvelope) ([]byte, error) {
+	if env == nil {
+		return nil, fmt.Errorf("client envelope must not be nil")
+	}
+	return proto.Marshal(env)
 }
 
-func NewFrameCodec(maxMessageBytes int) (FrameCodec, error) {
-	if maxMessageBytes <= 0 {
-		return FrameCodec{}, fmt.Errorf("max message bytes must be positive")
+func DecodeClientEnvelope(payload []byte) (*ruleshiftv1.ClientEnvelope, error) {
+	var env ruleshiftv1.ClientEnvelope
+	if err := proto.Unmarshal(payload, &env); err != nil {
+		return nil, fmt.Errorf("decode client envelope: %w", err)
 	}
-	return FrameCodec{MaxMessageBytes: uint32(maxMessageBytes)}, nil
+	if env.GetProtocolVersion() != CurrentVersion {
+		return nil, fmt.Errorf("unsupported protocol version: got=%d want=%d", env.GetProtocolVersion(), CurrentVersion)
+	}
+	return &env, nil
 }
 
-func (c FrameCodec) Encode(payload []byte) ([]byte, error) {
-	if len(payload) == 0 {
-		return nil, fmt.Errorf("%w: empty payload", ErrMalformedFrame)
+func EncodeServerEnvelope(env *ruleshiftv1.ServerEnvelope) ([]byte, error) {
+	if env == nil {
+		return nil, fmt.Errorf("server envelope must not be nil")
 	}
-	if uint32(len(payload)) > c.MaxMessageBytes {
-		return nil, fmt.Errorf("%w: got=%d max=%d", ErrFrameTooLarge, len(payload), c.MaxMessageBytes)
-	}
-
-	frame := make([]byte, 4+len(payload))
-	binary.BigEndian.PutUint32(frame[:4], uint32(len(payload)))
-	copy(frame[4:], payload)
-	return frame, nil
+	return proto.Marshal(env)
 }
 
-func (c FrameCodec) Decode(frame []byte) ([]byte, error) {
-	if len(frame) < 4 {
-		return nil, fmt.Errorf("%w: missing length prefix", ErrMalformedFrame)
+func DecodeServerEnvelope(payload []byte) (*ruleshiftv1.ServerEnvelope, error) {
+	var env ruleshiftv1.ServerEnvelope
+	if err := proto.Unmarshal(payload, &env); err != nil {
+		return nil, fmt.Errorf("decode server envelope: %w", err)
 	}
-
-	size := binary.BigEndian.Uint32(frame[:4])
-	if size == 0 {
-		return nil, fmt.Errorf("%w: empty payload", ErrMalformedFrame)
-	}
-	if size > c.MaxMessageBytes {
-		return nil, fmt.Errorf("%w: got=%d max=%d", ErrFrameTooLarge, size, c.MaxMessageBytes)
-	}
-	if len(frame[4:]) != int(size) {
-		return nil, fmt.Errorf("%w: declared=%d actual=%d", ErrMalformedFrame, size, len(frame[4:]))
-	}
-
-	payload := make([]byte, size)
-	copy(payload, frame[4:])
-	return payload, nil
-}
-
-func (c FrameCodec) EncodeMessage(message proto.Message) ([]byte, error) {
-	if message == nil {
-		return nil, ErrNilProtoMessage
-	}
-
-	payload, err := proto.Marshal(message)
-	if err != nil {
-		return nil, fmt.Errorf("marshal protobuf message: %w", err)
-	}
-
-	frame, err := c.Encode(payload)
-	if err != nil {
-		return nil, fmt.Errorf("encode protobuf frame: %w", err)
-	}
-	return frame, nil
-}
-
-func (c FrameCodec) DecodeMessage(frame []byte, message proto.Message) error {
-	if message == nil {
-		return ErrNilProtoMessage
-	}
-
-	payload, err := c.Decode(frame)
-	if err != nil {
-		return fmt.Errorf("decode protobuf frame: %w", err)
-	}
-	if err := proto.Unmarshal(payload, message); err != nil {
-		return fmt.Errorf("unmarshal protobuf message: %w", err)
-	}
-	return nil
+	return &env, nil
 }

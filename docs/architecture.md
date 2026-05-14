@@ -6,7 +6,7 @@ Ruleshift is an authoritative multiplayer state server. The future domain is a S
 
 - Phase 0: repository discovery and project plan.
 - Phase 1: project skeleton with Go module, entrypoints, config, logging, and package boundaries.
-- Phase 2: protobuf schema, generation targets, framing, and protocol validation fallback.
+- Phase 2: protobuf schema, generation targets, and direct protobuf WebSocket payloads.
 - Phase 3: authoritative integer room model with sequential runtime tests.
 - Phase 4: actor-like runtime hardening with bounded session queues and slow-consumer handling.
 - Phase 5: WebSocket gateway.
@@ -23,14 +23,14 @@ Ruleshift is an authoritative multiplayer state server. The future domain is a S
 
 ### Gateway
 
-`cmd/gateway` owns HTTP server setup. `internal/gateway` owns the WebSocket state machine: decode envelopes, validate session state, call auth, submit room commands, and write server envelopes.
+`cmd/gateway` owns HTTP server setup. `internal/gateway` owns the Gorilla WebSocket state machine: read binary protobuf envelopes, validate session state, call auth, submit room commands, and write server envelopes. Gateway websocket sessions own bounded outbound queues and implement `room.PlayerSink`.
 
 Phase 5 gateway behavior:
 
 - `/healthz` returns a simple HTTP health response;
 - `/ws` upgrades to WebSocket;
 - WebSocket messages are binary;
-- binary payloads are `uint32` length-prefixed protobuf envelopes;
+- binary payloads are protobuf envelopes serialized directly with the generated protobuf runtime;
 - `AuthRequest` must be the first client envelope;
 - `JoinRoomRequest` creates or joins a room and returns `JoinRoomOk` plus `StateSnapshot`;
 - `IntCommand` is submitted to the authoritative room runtime;
@@ -44,7 +44,7 @@ Phase 5 gateway behavior:
 
 ### Protocol
 
-`internal/protocol` owns binary framing, protobuf schema, generated bindings, and envelope validation. Every client message flows through `ClientEnvelope`; every server message flows through `ServerEnvelope`.
+`internal/protocol` owns protobuf schema, generated bindings, protocol versioning, and protobuf encode/decode helpers. Every client message flows through `ClientEnvelope`; every server message flows through `ServerEnvelope`.
 
 ### RoomRegistry
 
@@ -65,13 +65,13 @@ Phase 3 behavior:
 
 ### State Replication
 
-Successful commands produce a monotonically increasing revision and a `StateDelta`. Joined clients are represented by a small room-local `PlayerSession` interface. The runtime sends the same delta object to every joined session, keeping network implementation out of room logic.
+Successful commands produce a monotonically increasing revision and a `StateDelta`. Joined clients are represented inside room logic by the small `PlayerSink` interface. The runtime sends the same protobuf envelope to every joined sink, keeping WebSocket implementation details out of room logic.
 
 Joining clients receive a `StateSnapshot`. Reconnect-specific resume behavior is planned for phase 7.
 
 ### Backpressure
 
-Room sessions own bounded outbound queues. Runtime broadcast uses only non-blocking sends:
+Gateway websocket sessions own bounded outbound queues. Runtime broadcast uses only non-blocking sends through `PlayerSink`:
 
 - first delta overflow increments a slow-consumer strike and compacts queued deltas into a fresh `StateSnapshot`;
 - repeated overflow closes the session with `slow_consumer`;

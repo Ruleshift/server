@@ -33,19 +33,18 @@ Implemented in this iteration:
 - Auth interfaces with local mock provider and Steam Web API provider skeleton.
 - Authoritative room state with `int64` value, monotonic `uint64` revision, Add/Set command apply logic, snapshots, deltas, and registry.
 - Actor-like `RoomRuntime` owns state, accepts commands through a bounded queue, registers room-local delta subscribers, and broadcasts the same delta to joined clients.
-- Bounded `PlayerSession` outbound queues with non-blocking send, snapshot compaction for lagging clients, repeated slow-consumer disconnects, and graceful shutdown close.
-- WebSocket gateway on `/ws` with binary length-prefixed protobuf envelopes, mock auth, join room, snapshots, Add/Set commands, delta broadcast, app-level ping/pong, and basic client sequence checks.
+- Gateway-owned websocket sessions implement `room.PlayerSink` with bounded outbound queues, non-blocking send, snapshot compaction for lagging clients, repeated slow-consumer disconnects, and graceful shutdown close.
+- WebSocket gateway on `/ws` using Gorilla WebSocket with binary protobuf envelopes, mock auth, join room, snapshots, Add/Set commands, delta broadcast, app-level ping/pong, and basic client sequence checks.
 - Protobuf schema in `internal/protocol/proto/ruleshift.proto`.
-- Length-prefixed binary frame codec for protobuf payloads.
 - Generated Go and C# protobuf bindings.
-- Protocol validation for generated envelope versioning, oneof-style payloads, and command fields.
+- Direct protobuf encode/decode through generated Go and C# bindings.
 - Makefile targets for Go and C# protobuf generation.
-- Unit and integration tests for mock auth, config, framing, envelope validation, bounded send queues, integer command apply, room broadcast, invalid commands, concurrent command ordering, slow consumers, runtime shutdown, and WebSocket gateway flows.
+- Unit and integration tests for mock auth, config, protobuf WebSocket gateway flows, bounded send queues, integer command apply, room broadcast, invalid commands, concurrent command ordering, slow consumers, and runtime shutdown.
 - Documentation for architecture, protocol, Steam integration, Unity integration, and performance plan.
 
 Not implemented yet:
 
-- Reconnect/session replacement behavior.
+- Reconnect/resume flow.
 - Prometheus metrics and pprof endpoints.
 - Bot load execution against the gateway.
 - Card game mechanics. These are intentionally out of scope for the MVP.
@@ -85,7 +84,7 @@ Environment variables:
 | --- | --- | --- |
 | `RULESHIFT_ADDR` | `:8080` | HTTP gateway listen address |
 | `RULESHIFT_ENV` | `dev` | Environment label for logs |
-| `RULESHIFT_MAX_MESSAGE_BYTES` | `65536` | Max framed protobuf payload size |
+| `RULESHIFT_MAX_MESSAGE_BYTES` | `65536` | Max protobuf WebSocket payload size |
 | `RULESHIFT_ROOM_INPUT_QUEUE_SIZE` | `1024` | Bounded per-room command queue size |
 | `RULESHIFT_SESSION_SEND_QUEUE_SIZE` | `256` | Bounded per-session send queue size |
 | `RULESHIFT_AUTH_TIMEOUT` | `5s` | Auth deadline |
@@ -96,12 +95,7 @@ Environment variables:
 
 ## Protocol Direction
 
-All client messages will be wrapped in `ClientEnvelope`. All server messages will be wrapped in `ServerEnvelope`. WebSocket payloads are binary and carry:
-
-```text
-uint32 big-endian length prefix
-protobuf payload bytes
-```
+All client messages will be wrapped in `ClientEnvelope`. All server messages will be wrapped in `ServerEnvelope`. Each WebSocket binary payload carries one serialized protobuf envelope with no extra application-level length prefix.
 
 The protobuf schema lives in [internal/protocol/proto/ruleshift.proto](internal/protocol/proto/ruleshift.proto).
 
@@ -117,7 +111,7 @@ The script prepends the WinGet-installed `protoc.exe` path for the current run, 
 
 1. Phase 0: repository discovery, architecture plan, documentation, project structure.
 2. Phase 1: Go skeleton, config, structured logging, entrypoints, package boundaries.
-3. Phase 2: protobuf generation, codec validation, malformed frame tests.
+3. Phase 2: protobuf generation and direct protobuf wire payloads.
 4. Phase 3: authoritative integer room model and reducer tests.
 5. Phase 4: actor-like room runtime, bounded queues, slow consumer behavior.
 6. Phase 5: WebSocket gateway integration tests.

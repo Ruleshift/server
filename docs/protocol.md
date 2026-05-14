@@ -2,16 +2,9 @@
 
 The MVP protocol uses WebSocket as transport and binary protobuf as payload.
 
-## Frame Format
+## Wire Format
 
-Each WebSocket binary payload carries:
-
-```text
-uint32 length prefix, big-endian
-protobuf payload bytes
-```
-
-The current skeleton implements length-prefix validation in `internal/protocol.FrameCodec`.
+Each WebSocket binary message carries one serialized protobuf envelope. WebSocket framing provides message boundaries, so there is no extra length prefix inside the payload.
 
 ## Envelopes
 
@@ -31,7 +24,7 @@ option csharp_namespace = "Ruleshift.Protocol.V1";
 
 ## Versioning
 
-`protocol_version` starts at `1`. The gateway will reject unsupported protocol versions in phase 5.
+`protocol_version` starts at `1`. The gateway rejects unsupported protocol versions before dispatching client payloads.
 
 ## Revision Model
 
@@ -65,7 +58,7 @@ protoc -I . --csharp_out=unity-client/Assets/Scripts/Network/Generated internal/
 
 `protoc` is installed through WinGet. The repository includes `scripts/proto.ps1`, which prepends the WinGet install path before running generation, so codegen works even if the already-running shell has not refreshed PATH.
 
-## Go Wrapper Layer
+## Generated Bindings
 
 The generated Go package is:
 
@@ -73,17 +66,17 @@ The generated Go package is:
 github.com/Ruleshift/server/internal/protocol/generated/go/ruleshiftv1
 ```
 
-`internal/protocol` keeps only the length-prefix frame codec and validation helpers around generated messages.
+Gateway code uses `internal/protocol` encode/decode helpers, which delegate directly to the generated protobuf runtime.
 
 ## Error Handling
 
-Malformed frames are rejected before protobuf decode. Invalid envelopes are rejected after decode:
+Oversized WebSocket frames are rejected by the transport. Malformed protobuf payloads are rejected while decoding `ClientEnvelope`. The gateway and room runtime reject invalid application requests:
 
 - unsupported protocol version;
 - missing payload;
-- unknown payload;
-- empty required fields;
+- unexpected payload for the connection state;
+- empty room IDs or auth tickets;
 - invalid integer operation;
-- non-increasing delta revision.
+- stale or mismatched room revisions.
 
 

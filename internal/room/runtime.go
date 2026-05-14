@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-var ErrNilPlayerSession = errors.New("player session must not be nil")
+var ErrNilPlayerSink = errors.New("player sink must not be nil")
 var ErrRuntimeClosed = errors.New("room runtime is closed")
 
 type RuntimeConfig struct {
@@ -19,7 +19,7 @@ type RuntimeConfig struct {
 type RuntimeCommand struct {
 	Command      IntCommand
 	SnapshotOnly bool
-	JoinSession  PlayerSession
+	JoinSink     PlayerSink
 	Reply        chan<- CommandResult
 }
 
@@ -44,7 +44,7 @@ type RoomRuntime struct {
 	done        chan struct{}
 	closeOnce   sync.Once
 	cfg         RuntimeConfig
-	subscribers map[string]PlayerSession
+	subscribers map[string]PlayerSink
 	slowStrikes map[string]int
 	clock       func() time.Time
 }
@@ -63,7 +63,7 @@ func NewRuntime(roomID string, cfg RuntimeConfig) (*RoomRuntime, error) {
 		input:       make(chan RuntimeCommand, cfg.InputQueueSize),
 		done:        make(chan struct{}),
 		cfg:         cfg,
-		subscribers: make(map[string]PlayerSession),
+		subscribers: make(map[string]PlayerSink),
 		slowStrikes: make(map[string]int),
 		clock: func() time.Time {
 			return time.Now().UTC()
@@ -123,16 +123,16 @@ func (r *RoomRuntime) Snapshot(ctx context.Context) (StateSnapshot, error) {
 	}
 }
 
-func (r *RoomRuntime) Join(ctx context.Context, session PlayerSession) (StateSnapshot, error) {
-	if session == nil {
-		return StateSnapshot{}, ErrNilPlayerSession
+func (r *RoomRuntime) Join(ctx context.Context, sink PlayerSink) (StateSnapshot, error) {
+	if sink == nil {
+		return StateSnapshot{}, ErrNilPlayerSink
 	}
 	if r.isClosed() {
 		return StateSnapshot{}, ErrRuntimeClosed
 	}
 
 	reply := make(chan CommandResult, 1)
-	request := RuntimeCommand{JoinSession: session, Reply: reply}
+	request := RuntimeCommand{JoinSink: sink, Reply: reply}
 
 	select {
 	case r.input <- request:
@@ -165,8 +165,8 @@ func (r *RoomRuntime) Run(ctx context.Context) error {
 				request.Reply <- CommandResult{Snapshot: BuildSnapshot(r.state)}
 				continue
 			}
-			if request.JoinSession != nil {
-				err := r.join(request.JoinSession)
+			if request.JoinSink != nil {
+				err := r.join(request.JoinSink)
 				request.Reply <- CommandResult{Snapshot: BuildSnapshot(r.state), Err: err}
 				continue
 			}
@@ -194,16 +194,16 @@ func (r *RoomRuntime) QueueDepth() int {
 	return len(r.input)
 }
 
-func (r *RoomRuntime) join(session PlayerSession) error {
-	playerID := session.PlayerID()
+func (r *RoomRuntime) join(sink PlayerSink) error {
+	playerID := sink.PlayerID()
 	if playerID == "" {
 		return ErrEmptyPlayerID
 	}
 
-	if previous := r.subscribers[playerID]; previous != nil && previous != session {
+	if previous := r.subscribers[playerID]; previous != nil && previous != sink {
 		previous.Close(CloseReasonReplaced)
 	}
-	r.subscribers[playerID] = session
+	r.subscribers[playerID] = sink
 	r.slowStrikes[playerID] = 0
 	return nil
 }
@@ -220,12 +220,7 @@ func (r *RoomRuntime) broadcast(delta StateDelta) broadcastOutcome {
 	snapshot := BuildSnapshot(r.state)
 
 	for playerID, subscriber := range r.subscribers {
-		if subscriber.IsClosed() {
-			r.removeSubscriber(playerID)
-			continue
-		}
-
-		err := subscriber.TrySend(RoomMessage{Kind: MessageKindStateDelta, Delta: delta})
+		err := subscriber.Send(context.Background(), DeltaEnvelope(delta))
 		if err == nil {
 			outcome.delivered++
 			r.slowStrikes[playerID] = 0
@@ -237,7 +232,7 @@ func (r *RoomRuntime) broadcast(delta StateDelta) broadcastOutcome {
 			Err:      fmt.Errorf("send delta to player %q: %w", playerID, err),
 		})
 
-		if errors.Is(err, ErrSessionClosed) {
+		if errors.Is(err, ErrPlayerSinkClosed) {
 			r.removeSubscriber(playerID)
 			continue
 		}
@@ -250,7 +245,7 @@ func (r *RoomRuntime) broadcast(delta StateDelta) broadcastOutcome {
 			continue
 		}
 
-		if err := subscriber.TrySendSnapshot(snapshot); err != nil {
+		if err := subscriber.Send(context.Background(), SnapshotEnvelope(snapshot)); err != nil {
 			outcome.failures = append(outcome.failures, BroadcastFailure{
 				PlayerID: playerID,
 				Err:      fmt.Errorf("compact delta queue to snapshot for player %q: %w", playerID, err),
@@ -265,7 +260,7 @@ func (r *RoomRuntime) broadcast(delta StateDelta) broadcastOutcome {
 	return outcome
 }
 
-func (r *RoomRuntime) shutdown(reason CloseReason) {
+func (r *RoomRuntime) shutdown(reason string) {
 	for playerID, subscriber := range r.subscribers {
 		subscriber.Close(reason)
 		r.removeSubscriber(playerID)

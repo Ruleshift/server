@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	ruleshiftv1 "github.com/Ruleshift/server/internal/protocol/generated/go/ruleshiftv1"
 )
 
 func TestRoomRuntimeBroadcastsSameDeltasToAllJoinedClients(t *testing.T) {
@@ -154,10 +156,7 @@ func TestRoomRuntimeCompactsSlowConsumerQueueToSnapshot(t *testing.T) {
 	})
 	defer stopTestRuntime(t, cancel, done)
 
-	session, err := NewBoundedPlayerSession("player-1", 1)
-	if err != nil {
-		t.Fatalf("NewBoundedPlayerSession returned error: %v", err)
-	}
+	session := newBoundedTestSink("player-1", 1)
 
 	ctx, cancelCtx := context.WithTimeout(context.Background(), time.Second)
 	defer cancelCtx()
@@ -195,12 +194,13 @@ func TestRoomRuntimeCompactsSlowConsumerQueueToSnapshot(t *testing.T) {
 		t.Fatal("session closed after first slow-consumer strike")
 	}
 
-	message := readRoomMessage(t, session.Outbound())
-	if message.Kind != MessageKindStateSnapshot {
-		t.Fatalf("message kind = %d, want MessageKindStateSnapshot", message.Kind)
+	env := session.read(t)
+	snapshot := env.GetStateSnapshot()
+	if snapshot == nil {
+		t.Fatalf("payload = nil, want StateSnapshot")
 	}
-	if message.Snapshot.Value != 2 || message.Snapshot.Revision != 2 {
-		t.Fatalf("snapshot = value %d revision %d, want 2/2", message.Snapshot.Value, message.Snapshot.Revision)
+	if snapshot.GetValue() != 2 || snapshot.GetRevision() != 2 {
+		t.Fatalf("snapshot = value %d revision %d, want 2/2", snapshot.GetValue(), snapshot.GetRevision())
 	}
 }
 
@@ -211,10 +211,7 @@ func TestRoomRuntimeDisconnectsPersistentSlowConsumer(t *testing.T) {
 	})
 	defer stopTestRuntime(t, cancel, done)
 
-	session, err := NewBoundedPlayerSession("player-1", 1)
-	if err != nil {
-		t.Fatalf("NewBoundedPlayerSession returned error: %v", err)
-	}
+	session := newBoundedTestSink("player-1", 1)
 
 	ctx, cancelCtx := context.WithTimeout(context.Background(), time.Second)
 	defer cancelCtx()
@@ -317,7 +314,7 @@ type collectingSink struct {
 	mu          sync.Mutex
 	received    []StateDelta
 	closed      bool
-	closeReason CloseReason
+	closeReason string
 }
 
 func newCollectingSink(playerID string) *collectingSink {
@@ -328,26 +325,23 @@ func (s *collectingSink) PlayerID() string {
 	return s.playerID
 }
 
-func (s *collectingSink) TrySend(message RoomMessage) error {
+func (s *collectingSink) Send(ctx context.Context, msg *ruleshiftv1.ServerEnvelope) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return ErrSessionClosed
+		return ErrPlayerSinkClosed
 	}
-	if message.Kind != MessageKindStateDelta {
+	delta := msg.GetStateDelta()
+	if delta == nil {
 		return nil
 	}
-	delta := message.Delta
-	s.received = append(s.received, delta)
-	return nil
-}
-
-func (s *collectingSink) TrySendSnapshot(StateSnapshot) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return ErrSessionClosed
-	}
+	s.received = append(s.received, stateDeltaFromProto(delta))
 	return nil
 }
 
@@ -357,7 +351,7 @@ func (s *collectingSink) IsClosed() bool {
 	return s.closed
 }
 
-func (s *collectingSink) Close(reason CloseReason) {
+func (s *collectingSink) Close(reason string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closed = true
@@ -373,17 +367,108 @@ func (s *collectingSink) deltas() []StateDelta {
 	return copied
 }
 
-func readRoomMessage(t *testing.T, ch <-chan RoomMessage) RoomMessage {
+type boundedTestSink struct {
+	playerID    string
+	capacity    int
+	mu          sync.Mutex
+	queue       []*ruleshiftv1.ServerEnvelope
+	closed      bool
+	closeReason string
+}
+
+func newBoundedTestSink(playerID string, capacity int) *boundedTestSink {
+	return &boundedTestSink{
+		playerID: playerID,
+		capacity: capacity,
+		queue:    make([]*ruleshiftv1.ServerEnvelope, 0, capacity),
+	}
+}
+
+func (s *boundedTestSink) PlayerID() string {
+	return s.playerID
+}
+
+func (s *boundedTestSink) Send(ctx context.Context, msg *ruleshiftv1.ServerEnvelope) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return ErrPlayerSinkClosed
+	}
+	if msg.GetStateSnapshot() != nil {
+		s.queue = s.queue[:0]
+	}
+	if len(s.queue) >= s.capacity {
+		return ErrPlayerSinkFull
+	}
+	s.queue = append(s.queue, msg)
+	return nil
+}
+
+func (s *boundedTestSink) Close(reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return
+	}
+	s.closed = true
+	s.closeReason = reason
+}
+
+func (s *boundedTestSink) IsClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
+func (s *boundedTestSink) CloseReason() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closeReason
+}
+
+func (s *boundedTestSink) read(t *testing.T) *ruleshiftv1.ServerEnvelope {
 	t.Helper()
 
-	select {
-	case message, ok := <-ch:
-		if !ok {
-			t.Fatal("outbound channel is closed")
-		}
-		return message
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for room message")
-		return RoomMessage{}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.queue) == 0 {
+		t.Fatal("sink queue is empty")
+	}
+	env := s.queue[0]
+	copy(s.queue, s.queue[1:])
+	s.queue = s.queue[:len(s.queue)-1]
+	return env
+}
+
+func stateDeltaFromProto(delta *ruleshiftv1.StateDelta) StateDelta {
+	return StateDelta{
+		RoomID:            delta.GetRoomId(),
+		PreviousValue:     delta.GetPreviousValue(),
+		NewValue:          delta.GetNewValue(),
+		PreviousRevision:  delta.GetPreviousRevision(),
+		NewRevision:       delta.GetNewRevision(),
+		ChangedByPlayerID: delta.GetChangedByPlayerId(),
+		Operation:         operationFromProto(delta.GetOperation()),
+		Operand:           delta.GetOperand(),
+	}
+}
+
+func operationFromProto(operation ruleshiftv1.IntOperation) Operation {
+	switch operation {
+	case ruleshiftv1.IntOperation_INT_OPERATION_ADD:
+		return OperationAdd
+	case ruleshiftv1.IntOperation_INT_OPERATION_SET:
+		return OperationSet
+	default:
+		return OperationUnspecified
 	}
 }

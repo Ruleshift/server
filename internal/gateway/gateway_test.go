@@ -1,15 +1,8 @@
 package gateway
 
 import (
-	"bufio"
-	"crypto/rand"
-	"encoding/base64"
-	"encoding/binary"
-	"errors"
-	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -17,10 +10,10 @@ import (
 	"time"
 
 	"github.com/Ruleshift/server/internal/auth"
-	netx "github.com/Ruleshift/server/internal/net"
 	"github.com/Ruleshift/server/internal/protocol"
 	ruleshiftv1 "github.com/Ruleshift/server/internal/protocol/generated/go/ruleshiftv1"
 	"github.com/Ruleshift/server/internal/room"
+	"github.com/gorilla/websocket"
 )
 
 func TestGatewayRejectsCommandBeforeAuth(t *testing.T) {
@@ -233,9 +226,7 @@ func readDelta(t *testing.T, client *testWebSocketClient) *ruleshiftv1.StateDelt
 }
 
 type testWebSocketClient struct {
-	conn   net.Conn
-	reader *bufio.Reader
-	frame  protocol.FrameCodec
+	conn *websocket.Conn
 }
 
 func dialTestWebSocket(t *testing.T, rawURL string) *testWebSocketClient {
@@ -246,55 +237,29 @@ func dialTestWebSocket(t *testing.T, rawURL string) *testWebSocketClient {
 		t.Fatalf("parse server URL: %v", err)
 	}
 
-	conn, err := net.Dial("tcp", parsed.Host)
+	switch parsed.Scheme {
+	case "https":
+		parsed.Scheme = "wss"
+	default:
+		parsed.Scheme = "ws"
+	}
+
+	conn, _, err := websocket.DefaultDialer.Dial(parsed.String(), nil)
 	if err != nil {
 		t.Fatalf("dial test websocket: %v", err)
 	}
 
-	keyBytes := make([]byte, 16)
-	if _, err := rand.Read(keyBytes); err != nil {
-		t.Fatalf("random websocket key: %v", err)
-	}
-	key := base64.StdEncoding.EncodeToString(keyBytes)
-
-	request := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n", parsed.Host, key)
-	if _, err := conn.Write([]byte(request)); err != nil {
-		_ = conn.Close()
-		t.Fatalf("write websocket handshake: %v", err)
-	}
-
-	reader := bufio.NewReader(conn)
-	response, err := http.ReadResponse(reader, &http.Request{Method: http.MethodGet})
-	if err != nil {
-		_ = conn.Close()
-		t.Fatalf("read websocket handshake: %v", err)
-	}
-	if response.StatusCode != http.StatusSwitchingProtocols {
-		_ = conn.Close()
-		t.Fatalf("handshake status = %d, want 101", response.StatusCode)
-	}
-
-	frame, err := protocol.NewFrameCodec(64 * 1024)
-	if err != nil {
-		_ = conn.Close()
-		t.Fatalf("NewFrameCodec returned error: %v", err)
-	}
-
-	return &testWebSocketClient{
-		conn:   conn,
-		reader: reader,
-		frame:  frame,
-	}
+	return &testWebSocketClient{conn: conn}
 }
 
 func (c *testWebSocketClient) Send(t *testing.T, env *ruleshiftv1.ClientEnvelope) {
 	t.Helper()
 
-	frame, err := c.frame.EncodeMessage(env)
+	payload, err := protocol.EncodeClientEnvelope(env)
 	if err != nil {
 		t.Fatalf("encode client envelope: %v", err)
 	}
-	if err := writeMaskedFrame(c.conn, netx.OpcodeBinary, frame); err != nil {
+	if err := c.conn.WriteMessage(websocket.BinaryMessage, payload); err != nil {
 		t.Fatalf("write websocket frame: %v", err)
 	}
 }
@@ -305,85 +270,21 @@ func (c *testWebSocketClient) Read(t *testing.T) *ruleshiftv1.ServerEnvelope {
 	if err := c.conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
 		t.Fatalf("set read deadline: %v", err)
 	}
-	opcode, payload, err := readUnmaskedFrame(c.reader)
+	opcode, payload, err := c.conn.ReadMessage()
 	if err != nil {
 		t.Fatalf("read websocket frame: %v", err)
 	}
-	if opcode != netx.OpcodeBinary {
+	if opcode != websocket.BinaryMessage {
 		t.Fatalf("opcode = %d, want binary", opcode)
 	}
 
-	var env ruleshiftv1.ServerEnvelope
-	if err := c.frame.DecodeMessage(payload, &env); err != nil {
+	env, err := protocol.DecodeServerEnvelope(payload)
+	if err != nil {
 		t.Fatalf("decode server envelope: %v", err)
 	}
-	return &env
+	return env
 }
 
 func (c *testWebSocketClient) Close() {
 	_ = c.conn.Close()
-}
-
-func writeMaskedFrame(conn net.Conn, opcode byte, payload []byte) error {
-	header := []byte{0x80 | opcode}
-	switch {
-	case len(payload) <= 125:
-		header = append(header, 0x80|byte(len(payload)))
-	case len(payload) <= 65535:
-		header = append(header, 0x80|126, 0, 0)
-		binary.BigEndian.PutUint16(header[len(header)-2:], uint16(len(payload)))
-	default:
-		header = append(header, 0x80|127, 0, 0, 0, 0, 0, 0, 0, 0)
-		binary.BigEndian.PutUint64(header[len(header)-8:], uint64(len(payload)))
-	}
-
-	mask := [4]byte{1, 2, 3, 4}
-	masked := make([]byte, len(payload))
-	for i := range payload {
-		masked[i] = payload[i] ^ mask[i%4]
-	}
-
-	if _, err := conn.Write(header); err != nil {
-		return err
-	}
-	if _, err := conn.Write(mask[:]); err != nil {
-		return err
-	}
-	_, err := conn.Write(masked)
-	return err
-}
-
-func readUnmaskedFrame(reader *bufio.Reader) (byte, []byte, error) {
-	header := make([]byte, 2)
-	if _, err := io.ReadFull(reader, header); err != nil {
-		return 0, nil, err
-	}
-
-	opcode := header[0] & 0x0f
-	masked := header[1]&0x80 != 0
-	if masked {
-		return 0, nil, errors.New("server frame unexpectedly masked")
-	}
-
-	length := uint64(header[1] & 0x7f)
-	switch length {
-	case 126:
-		extended := make([]byte, 2)
-		if _, err := io.ReadFull(reader, extended); err != nil {
-			return 0, nil, err
-		}
-		length = uint64(binary.BigEndian.Uint16(extended))
-	case 127:
-		extended := make([]byte, 8)
-		if _, err := io.ReadFull(reader, extended); err != nil {
-			return 0, nil, err
-		}
-		length = binary.BigEndian.Uint64(extended)
-	}
-
-	payload := make([]byte, int(length))
-	if _, err := io.ReadFull(reader, payload); err != nil {
-		return 0, nil, err
-	}
-	return opcode, payload, nil
 }

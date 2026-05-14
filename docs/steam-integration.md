@@ -24,7 +24,7 @@ It returns a stable server-side `PlayerID`.
 2. Unity sends the ticket in `AuthRequest`.
 3. The Go gateway calls `SteamWebAPIProvider`.
 4. The provider validates ownership and Steam identity with Steam Web API.
-5. The server binds the verified identity to `PlayerSession`.
+5. The gateway binds the verified identity to its websocket session, which implements `room.PlayerSink`.
 6. Room logic receives only server-authenticated player identity.
 
 ## Security Notes

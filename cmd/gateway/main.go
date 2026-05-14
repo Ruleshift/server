@@ -10,7 +10,6 @@ import (
 	"github.com/Ruleshift/server/internal/auth"
 	"github.com/Ruleshift/server/internal/config"
 	"github.com/Ruleshift/server/internal/gateway"
-	netx "github.com/Ruleshift/server/internal/net"
 	"github.com/Ruleshift/server/internal/room"
 )
 
@@ -37,7 +36,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthHandler)
-	mux.HandleFunc(netx.WebSocketPath, gatewayHandler.HandleWebSocket)
+	mux.HandleFunc(gateway.WebSocketPath, gatewayHandler.HandleWebSocket)
 
 	server := &http.Server{
 		Addr:              cfg.Addr,
