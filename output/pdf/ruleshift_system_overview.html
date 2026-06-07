@@ -1,0 +1,1012 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Ruleshift: как работает система</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 14mm 13mm 15mm 13mm;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: #172033;
+      background: #ffffff;
+      font-family: "Segoe UI", Arial, sans-serif;
+      font-size: 10.4pt;
+      line-height: 1.46;
+    }
+
+    h1, h2, h3, p {
+      margin-top: 0;
+    }
+
+    h1 {
+      font-size: 30pt;
+      line-height: 1.05;
+      letter-spacing: 0;
+      margin-bottom: 8mm;
+      color: #101827;
+    }
+
+    h2 {
+      font-size: 17pt;
+      margin: 0 0 4mm;
+      color: #101827;
+    }
+
+    h3 {
+      font-size: 12pt;
+      margin: 0 0 2mm;
+      color: #1c3557;
+    }
+
+    p {
+      margin-bottom: 3.2mm;
+    }
+
+    ul, ol {
+      padding-left: 5.5mm;
+      margin: 0 0 4mm;
+    }
+
+    li {
+      margin-bottom: 1.5mm;
+    }
+
+    code {
+      font-family: "Cascadia Mono", Consolas, monospace;
+      font-size: 9.2pt;
+      color: #0d4b74;
+    }
+
+    .page {
+      page-break-after: always;
+      min-height: 267mm;
+      position: relative;
+    }
+
+    .page:last-child {
+      page-break-after: auto;
+    }
+
+    .eyebrow {
+      color: #306c87;
+      font-size: 9pt;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin-bottom: 4mm;
+    }
+
+    .subtitle {
+      font-size: 13pt;
+      color: #40546d;
+      max-width: 165mm;
+      margin-bottom: 9mm;
+    }
+
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 3mm;
+      margin-bottom: 9mm;
+    }
+
+    .meta div, .callout, .note, .metric {
+      border: 1px solid #d8e1ea;
+      border-radius: 6px;
+      padding: 3.5mm;
+      background: #f7fafc;
+    }
+
+    .meta strong, .metric strong {
+      display: block;
+      font-size: 8.8pt;
+      color: #607085;
+      margin-bottom: 1mm;
+      text-transform: uppercase;
+      letter-spacing: .4px;
+    }
+
+    .meta span {
+      font-size: 10.5pt;
+      font-weight: 700;
+      color: #172033;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6mm;
+      align-items: start;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4mm;
+    }
+
+    .panel {
+      border: 1px solid #d8e1ea;
+      border-radius: 8px;
+      padding: 4.5mm;
+      background: #ffffff;
+      break-inside: avoid;
+    }
+
+    .panel.tint {
+      background: #f6fbf8;
+      border-color: #c8dfd4;
+    }
+
+    .panel.warn {
+      background: #fff9f1;
+      border-color: #ead1a8;
+    }
+
+    .diagram {
+      width: 100%;
+      border: 1px solid #d8e1ea;
+      border-radius: 8px;
+      background: #fbfdff;
+      padding: 3mm;
+      margin: 2mm 0 5mm;
+      break-inside: avoid;
+    }
+
+    svg {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    .box {
+      fill: #ffffff;
+      stroke: #97aec4;
+      stroke-width: 1.3;
+    }
+
+    .box-blue {
+      fill: #eef7fb;
+      stroke: #5798b7;
+    }
+
+    .box-green {
+      fill: #eff9f3;
+      stroke: #60a879;
+    }
+
+    .box-gold {
+      fill: #fff6e5;
+      stroke: #d3a74f;
+    }
+
+    .box-red {
+      fill: #fff2f2;
+      stroke: #d88282;
+    }
+
+    .label {
+      font-family: "Segoe UI", Arial, sans-serif;
+      font-size: 13px;
+      fill: #182235;
+      font-weight: 650;
+    }
+
+    .small {
+      font-size: 10.5px;
+      fill: #526174;
+      font-weight: 500;
+    }
+
+    .arrow {
+      stroke: #597083;
+      stroke-width: 1.6;
+      marker-end: url(#arrow);
+      fill: none;
+    }
+
+    .dashed {
+      stroke-dasharray: 5 4;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 4mm;
+      break-inside: avoid;
+    }
+
+    th, td {
+      border-bottom: 1px solid #d8e1ea;
+      padding: 2.4mm 2mm;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      font-size: 8.5pt;
+      color: #5b6a7b;
+      text-transform: uppercase;
+      letter-spacing: .4px;
+      background: #f5f8fb;
+    }
+
+    .footer {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      color: #78879a;
+      font-size: 8.5pt;
+      display: flex;
+      justify-content: space-between;
+      border-top: 1px solid #d8e1ea;
+      padding-top: 2mm;
+    }
+
+    .toc {
+      columns: 2;
+      column-gap: 10mm;
+      margin-top: 4mm;
+    }
+
+    .toc p {
+      break-inside: avoid;
+      border-bottom: 1px solid #e5ecf2;
+      padding-bottom: 2mm;
+      margin-bottom: 2mm;
+    }
+
+    .quote {
+      font-size: 14pt;
+      line-height: 1.35;
+      color: #1c3557;
+      border-left: 4px solid #3c8dad;
+      padding-left: 4mm;
+      margin: 7mm 0;
+    }
+
+    .metric-row {
+      display: grid;
+      grid-template-columns: 48mm 1fr 22mm;
+      gap: 3mm;
+      align-items: center;
+      margin-bottom: 2.5mm;
+    }
+
+    .bar-track {
+      height: 8mm;
+      border-radius: 4px;
+      background: #e8eef4;
+      overflow: hidden;
+    }
+
+    .bar {
+      height: 100%;
+      background: linear-gradient(90deg, #3c8dad, #6abf8e);
+    }
+
+    .muted {
+      color: #5e6e82;
+    }
+
+    .keep {
+      break-inside: avoid;
+    }
+  </style>
+</head>
+<body>
+  <section class="page">
+    <div class="eyebrow">Ruleshift system article</div>
+    <h1>Как работает Ruleshift</h1>
+    <p class="subtitle">
+      Быстрое объяснение архитектуры Go-сервера: от matchmaking ticket до assignment,
+      от WebSocket-команды до авторитетного изменения состояния комнаты, от backpressure
+      до recovery через snapshot.
+    </p>
+
+    <div class="meta">
+      <div><strong>Цель</strong><span>Multiplayer backend</span></div>
+      <div><strong>Текущий MVP</strong><span>shared int64 state</span></div>
+      <div><strong>Транспорт</strong><span>WebSocket + protobuf</span></div>
+      <div><strong>Дата</strong><span>04.06.2026</span></div>
+    </div>
+
+    <div class="quote">
+      Ruleshift демонстрирует не CRUD, а авторитетный real-time pipeline:
+      клиенты отправляют intent, сервер упорядочивает команды, меняет состояние и
+      рассылает всем игрокам один и тот же поток ревизий.
+    </div>
+
+    <div class="diagram">
+      <svg viewBox="0 0 980 260" role="img" aria-label="System overview diagram">
+        <defs>
+          <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#597083"></path>
+          </marker>
+        </defs>
+        <rect x="20" y="42" width="130" height="58" rx="8" class="box-blue"></rect>
+        <text x="85" y="66" text-anchor="middle" class="label">Unity client</text>
+        <text x="85" y="84" text-anchor="middle" class="small">Auth, join, command</text>
+
+        <rect x="215" y="42" width="150" height="58" rx="8" class="box"></rect>
+        <text x="290" y="66" text-anchor="middle" class="label">Gateway</text>
+        <text x="290" y="84" text-anchor="middle" class="small">HTTP + WebSocket</text>
+
+        <rect x="430" y="20" width="150" height="58" rx="8" class="box-gold"></rect>
+        <text x="505" y="44" text-anchor="middle" class="label">Auth</text>
+        <text x="505" y="62" text-anchor="middle" class="small">mock / Steam stub</text>
+
+        <rect x="430" y="104" width="150" height="58" rx="8" class="box-green"></rect>
+        <text x="505" y="128" text-anchor="middle" class="label">Matchmaking</text>
+        <text x="505" y="146" text-anchor="middle" class="small">tickets, matches</text>
+
+        <rect x="650" y="104" width="150" height="58" rx="8" class="box-green"></rect>
+        <text x="725" y="128" text-anchor="middle" class="label">Allocator</text>
+        <text x="725" y="146" text-anchor="middle" class="small">server seats</text>
+
+        <rect x="650" y="20" width="150" height="58" rx="8" class="box"></rect>
+        <text x="725" y="44" text-anchor="middle" class="label">RoomRuntime</text>
+        <text x="725" y="62" text-anchor="middle" class="small">sequential state</text>
+
+        <rect x="850" y="20" width="120" height="58" rx="8" class="box-blue"></rect>
+        <text x="910" y="44" text-anchor="middle" class="label">Broadcast</text>
+        <text x="910" y="62" text-anchor="middle" class="small">deltas/snapshot</text>
+
+        <path d="M150 71 L215 71" class="arrow"></path>
+        <path d="M365 62 L430 50" class="arrow"></path>
+        <path d="M365 82 L430 125" class="arrow"></path>
+        <path d="M580 133 L650 133" class="arrow"></path>
+        <path d="M580 50 L650 50" class="arrow"></path>
+        <path d="M800 50 L850 50" class="arrow"></path>
+        <path d="M910 78 C900 210 120 210 85 100" class="arrow dashed"></path>
+
+        <text x="150" y="225" text-anchor="middle" class="small">ServerEnvelope stream returns to clients</text>
+      </svg>
+    </div>
+
+    <div class="toc">
+      <p><strong>1.</strong> Что уже реализовано и где это лежит</p>
+      <p><strong>2.</strong> Поток ticket -> assignment</p>
+      <p><strong>3.</strong> Как работает авторитетная комната</p>
+      <p><strong>4.</strong> Backpressure, reconnect и replay</p>
+      <p><strong>5.</strong> Надежность, TTL, idempotency и failure path</p>
+      <p><strong>6.</strong> Производительность, проверки и следующие шаги</p>
+    </div>
+
+    <div class="footer"><span>Ruleshift overview</span><span>1</span></div>
+  </section>
+
+  <section class="page">
+    <h2>1. Короткая карта системы</h2>
+    <p>
+      Ruleshift сейчас состоит из двух уровней. Первый уровень уже подключен к публичному
+      gateway: клиент проходит auth, подключается к room и шлет protobuf-команды изменения
+      одного общего <code>int64</code>. Второй уровень появился как внутренний orchestration layer:
+      он моделирует будущий сервис matchmaking и assignment, но пока не вынесен наружу как HTTP
+      или protobuf API.
+    </p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Пакет</th>
+          <th>Ответственность</th>
+          <th>Что важно помнить</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>cmd/gateway</code></td>
+          <td>Собирает HTTP server, конфиг, health/readiness/metrics, graceful shutdown.</td>
+          <td>Здесь не должно быть domain logic.</td>
+        </tr>
+        <tr>
+          <td><code>internal/gateway</code></td>
+          <td>WebSocket state machine, auth-first protocol, protobuf decode/encode.</td>
+          <td>Session outbound queue bounded, writer loop вне room runtime.</td>
+        </tr>
+        <tr>
+          <td><code>internal/room</code></td>
+          <td>Авторитетное состояние комнаты, последовательное применение команд, broadcast.</td>
+          <td>Одна room - один actor-like runtime и bounded input queue.</td>
+        </tr>
+        <tr>
+          <td><code>internal/matchmaking</code></td>
+          <td>Ticket lifecycle, match formation, assignment lifecycle, события.</td>
+          <td>In-memory слой, готовый для будущих API handlers.</td>
+        </tr>
+        <tr>
+          <td><code>internal/allocator</code></td>
+          <td>Регистрация серверов и атомарное резервирование seats.</td>
+          <td>Reserve/release под одним mutex, индекс по game/build.</td>
+        </tr>
+        <tr>
+          <td><code>internal/connecttoken</code></td>
+          <td>HMAC-signed connect tokens для game server admission.</td>
+          <td>Токен содержит assignment/match/server/player/expiry claims.</td>
+        </tr>
+        <tr>
+          <td><code>internal/protocol</code></td>
+          <td>Protobuf schema, generated bindings, codec helpers, protocol version.</td>
+          <td>FlatBuffers в MVP не используются.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="grid-2">
+      <div class="panel tint">
+        <h3>Что уже можно показать</h3>
+        <ul>
+          <li>Авторитетный ordered revision stream для общей integer-room.</li>
+          <li>Reconnect через <code>last_seen_revision</code> и snapshot recovery.</li>
+          <li>Slow consumer handling: compact to snapshot, затем disconnect.</li>
+          <li>Matchmaking lifecycle в unit-tested internal layer.</li>
+          <li>Atomic allocation без двойного назначения одного seat.</li>
+        </ul>
+      </div>
+      <div class="panel warn">
+        <h3>Что пока не публичный продукт</h3>
+        <ul>
+          <li>Нет внешнего API для create/cancel ticket и poll assignment.</li>
+          <li>Нет durable storage: текущие stores in-memory.</li>
+          <li>Нет настоящего launcher для game server build.</li>
+          <li>Steam provider пока skeleton, mock auth используется локально.</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2>2. Поток от ticket до assignment</h2>
+    <p>
+      Целевой сервис начинается не с комнаты, а с matchmaking ticket. Игрок хочет попасть в игру,
+      сервис группирует совместимые tickets, резервирует серверные seats и выдает assignment:
+      endpoint, match id, server id и connect token.
+    </p>
+
+    <div class="diagram">
+      <svg viewBox="0 0 980 300" role="img" aria-label="Ticket to assignment flow">
+        <defs>
+          <marker id="arrow2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#597083"></path>
+          </marker>
+        </defs>
+        <rect x="25" y="40" width="130" height="62" rx="8" class="box-blue"></rect>
+        <text x="90" y="64" text-anchor="middle" class="label">1. Ticket</text>
+        <text x="90" y="84" text-anchor="middle" class="small">game/build/player</text>
+
+        <rect x="205" y="40" width="145" height="62" rx="8" class="box"></rect>
+        <text x="278" y="64" text-anchor="middle" class="label">2. Queue index</text>
+        <text x="278" y="84" text-anchor="middle" class="small">by game/build</text>
+
+        <rect x="400" y="40" width="145" height="62" rx="8" class="box-green"></rect>
+        <text x="472" y="64" text-anchor="middle" class="label">3. Match</text>
+        <text x="472" y="84" text-anchor="middle" class="small">N players</text>
+
+        <rect x="595" y="40" width="145" height="62" rx="8" class="box-gold"></rect>
+        <text x="668" y="64" text-anchor="middle" class="label">4. Reserve</text>
+        <text x="668" y="84" text-anchor="middle" class="small">atomic seats</text>
+
+        <rect x="790" y="40" width="145" height="62" rx="8" class="box-blue"></rect>
+        <text x="862" y="64" text-anchor="middle" class="label">5. Assignment</text>
+        <text x="862" y="84" text-anchor="middle" class="small">endpoint + token</text>
+
+        <path d="M155 71 L205 71" class="arrow"></path>
+        <path d="M350 71 L400 71" class="arrow"></path>
+        <path d="M545 71 L595 71" class="arrow"></path>
+        <path d="M740 71 L790 71" class="arrow"></path>
+
+        <rect x="95" y="170" width="170" height="56" rx="8" class="box-red"></rect>
+        <text x="180" y="193" text-anchor="middle" class="label">Cancel / expire</text>
+        <text x="180" y="212" text-anchor="middle" class="small">only while queued</text>
+
+        <rect x="405" y="170" width="170" height="56" rx="8" class="box-red"></rect>
+        <text x="490" y="193" text-anchor="middle" class="label">Allocation failed</text>
+        <text x="490" y="212" text-anchor="middle" class="small">match -> failed</text>
+
+        <rect x="715" y="170" width="170" height="56" rx="8" class="box-red"></rect>
+        <text x="800" y="193" text-anchor="middle" class="label">Assignment TTL</text>
+        <text x="800" y="212" text-anchor="middle" class="small">release reservation</text>
+
+        <path d="M90 102 C90 145 130 150 180 170" class="arrow dashed"></path>
+        <path d="M668 102 C668 140 555 150 490 170" class="arrow dashed"></path>
+        <path d="M862 102 C862 140 820 150 800 170" class="arrow dashed"></path>
+      </svg>
+    </div>
+
+    <div class="footer"><span>Ruleshift overview</span><span>2</span></div>
+  </section>
+
+  <section class="page">
+    <h2>3. Lifecycle state machine</h2>
+    <p>
+      Главное правило lifecycle: каждый переход должен быть допустимым и объяснимым. Это важно
+      для диагностики: разработчик игры должен видеть, где матч умер - в queue, allocation,
+      assignment TTL, connect validation или уже внутри игры.
+    </p>
+
+    <div class="diagram">
+      <svg viewBox="0 0 980 430" role="img" aria-label="Lifecycle state machine">
+        <defs>
+          <marker id="arrow3" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#597083"></path>
+          </marker>
+        </defs>
+        <rect x="40" y="50" width="110" height="48" rx="8" class="box-blue"></rect>
+        <text x="95" y="80" text-anchor="middle" class="label">queued</text>
+
+        <rect x="200" y="50" width="110" height="48" rx="8" class="box"></rect>
+        <text x="255" y="80" text-anchor="middle" class="label">matched</text>
+
+        <rect x="360" y="50" width="120" height="48" rx="8" class="box-gold"></rect>
+        <text x="420" y="80" text-anchor="middle" class="label">allocating</text>
+
+        <rect x="530" y="50" width="110" height="48" rx="8" class="box-green"></rect>
+        <text x="585" y="80" text-anchor="middle" class="label">assigned</text>
+
+        <rect x="690" y="50" width="120" height="48" rx="8" class="box-green"></rect>
+        <text x="750" y="80" text-anchor="middle" class="label">connecting</text>
+
+        <rect x="850" y="50" width="110" height="48" rx="8" class="box-green"></rect>
+        <text x="905" y="80" text-anchor="middle" class="label">in_game</text>
+
+        <path d="M150 74 L200 74" class="arrow"></path>
+        <path d="M310 74 L360 74" class="arrow"></path>
+        <path d="M480 74 L530 74" class="arrow"></path>
+        <path d="M640 74 L690 74" class="arrow"></path>
+        <path d="M810 74 L850 74" class="arrow"></path>
+
+        <rect x="120" y="190" width="120" height="48" rx="8" class="box-red"></rect>
+        <text x="180" y="220" text-anchor="middle" class="label">canceled</text>
+
+        <rect x="320" y="190" width="120" height="48" rx="8" class="box-red"></rect>
+        <text x="380" y="220" text-anchor="middle" class="label">expired</text>
+
+        <rect x="520" y="190" width="120" height="48" rx="8" class="box-red"></rect>
+        <text x="580" y="220" text-anchor="middle" class="label">failed</text>
+
+        <rect x="720" y="190" width="120" height="48" rx="8" class="box"></rect>
+        <text x="780" y="220" text-anchor="middle" class="label">ended</text>
+
+        <path d="M95 98 C100 145 145 160 180 190" class="arrow dashed"></path>
+        <path d="M95 98 C130 150 300 160 380 190" class="arrow dashed"></path>
+        <path d="M420 98 C430 150 520 165 580 190" class="arrow dashed"></path>
+        <path d="M585 98 C585 145 390 160 380 190" class="arrow dashed"></path>
+        <path d="M750 98 C740 145 625 160 580 190" class="arrow dashed"></path>
+        <path d="M905 98 C905 150 820 165 780 190" class="arrow dashed"></path>
+
+        <text x="95" y="130" text-anchor="middle" class="small">player cancel</text>
+        <text x="380" y="270" text-anchor="middle" class="small">TTL timeout</text>
+        <text x="580" y="270" text-anchor="middle" class="small">allocator/server failure</text>
+        <text x="780" y="270" text-anchor="middle" class="small">normal completion</text>
+
+        <rect x="70" y="330" width="840" height="50" rx="8" class="box"></rect>
+        <text x="490" y="352" text-anchor="middle" class="label">Audit events</text>
+        <text x="490" y="372" text-anchor="middle" class="small">ticket_id, match_id, server_id, player_id, state, reason, occurred_at; full tokens are not logged</text>
+      </svg>
+    </div>
+
+    <div class="grid-3">
+      <div class="panel">
+        <h3>Idempotency</h3>
+        <p>
+          Повторный create-ticket с тем же idempotency key возвращает тот же ticket. Активный
+          ticket игрока в том же game/build pool тоже переиспользуется.
+        </p>
+      </div>
+      <div class="panel">
+        <h3>Atomic allocation</h3>
+        <p>
+          Registry резервирует seats под mutex и индексирует servers по game/build. Один seat не
+          может быть выдан двум matches.
+        </p>
+      </div>
+      <div class="panel">
+        <h3>TTL cleanup</h3>
+        <p>
+          Queued ticket может expire. Assignment TTL failure переводит match в failed и освобождает
+          server reservation.
+        </p>
+      </div>
+    </div>
+
+    <h2>4. Как game server проверяет игрока</h2>
+    <p>
+      Connect token - это HMAC-signed claim set. В нем есть <code>assignment_id</code>,
+      <code>match_id</code>, <code>server_id</code>, <code>player_id</code> и <code>expires_at</code>.
+      Game server принимает игрока только если token валиден, не истек и claims совпадают с assignment.
+      В логах используется идентификатор assignment, но не полный token.
+    </p>
+
+    <div class="footer"><span>Ruleshift overview</span><span>3</span></div>
+  </section>
+
+  <section class="page">
+    <h2>5. WebSocket room pipeline</h2>
+    <p>
+      После того как клиент получил право играть, текущий публичный MVP работает через
+      WebSocket endpoint <code>/ws</code>. Клиент отправляет binary protobuf <code>ClientEnvelope</code>.
+      Gateway проверяет protocol version, sequence и session state, затем отправляет команду в
+      room runtime.
+    </p>
+
+    <div class="diagram">
+      <svg viewBox="0 0 980 360" role="img" aria-label="Room runtime pipeline">
+        <defs>
+          <marker id="arrow4" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#597083"></path>
+          </marker>
+        </defs>
+        <rect x="40" y="40" width="150" height="62" rx="8" class="box-blue"></rect>
+        <text x="115" y="64" text-anchor="middle" class="label">ClientEnvelope</text>
+        <text x="115" y="84" text-anchor="middle" class="small">binary protobuf</text>
+
+        <rect x="250" y="40" width="150" height="62" rx="8" class="box"></rect>
+        <text x="325" y="64" text-anchor="middle" class="label">Gateway</text>
+        <text x="325" y="84" text-anchor="middle" class="small">auth + sequence</text>
+
+        <rect x="460" y="40" width="150" height="62" rx="8" class="box-gold"></rect>
+        <text x="535" y="64" text-anchor="middle" class="label">Bounded queue</text>
+        <text x="535" y="84" text-anchor="middle" class="small">room input</text>
+
+        <rect x="670" y="40" width="150" height="62" rx="8" class="box-green"></rect>
+        <text x="745" y="64" text-anchor="middle" class="label">RoomRuntime</text>
+        <text x="745" y="84" text-anchor="middle" class="small">single owner</text>
+
+        <rect x="670" y="170" width="150" height="62" rx="8" class="box-green"></rect>
+        <text x="745" y="194" text-anchor="middle" class="label">RoomState</text>
+        <text x="745" y="214" text-anchor="middle" class="small">value + revision</text>
+
+        <rect x="460" y="170" width="150" height="62" rx="8" class="box"></rect>
+        <text x="535" y="194" text-anchor="middle" class="label">StateDelta</text>
+        <text x="535" y="214" text-anchor="middle" class="small">same for all</text>
+
+        <rect x="250" y="170" width="150" height="62" rx="8" class="box-blue"></rect>
+        <text x="325" y="194" text-anchor="middle" class="label">Session queue</text>
+        <text x="325" y="214" text-anchor="middle" class="small">bounded outbound</text>
+
+        <rect x="40" y="170" width="150" height="62" rx="8" class="box-blue"></rect>
+        <text x="115" y="194" text-anchor="middle" class="label">ServerEnvelope</text>
+        <text x="115" y="214" text-anchor="middle" class="small">delta or snapshot</text>
+
+        <path d="M190 71 L250 71" class="arrow"></path>
+        <path d="M400 71 L460 71" class="arrow"></path>
+        <path d="M610 71 L670 71" class="arrow"></path>
+        <path d="M745 102 L745 170" class="arrow"></path>
+        <path d="M670 201 L610 201" class="arrow"></path>
+        <path d="M460 201 L400 201" class="arrow"></path>
+        <path d="M250 201 L190 201" class="arrow"></path>
+
+        <rect x="835" y="40" width="120" height="62" rx="8" class="box"></rect>
+        <text x="895" y="64" text-anchor="middle" class="label">EventStore</text>
+        <text x="895" y="84" text-anchor="middle" class="small">append-only</text>
+        <path d="M820 70 L835 70" class="arrow"></path>
+
+        <rect x="835" y="170" width="120" height="62" rx="8" class="box-gold"></rect>
+        <text x="895" y="194" text-anchor="middle" class="label">Replay</text>
+        <text x="895" y="214" text-anchor="middle" class="small">restore state</text>
+        <path d="M895 102 L895 170" class="arrow dashed"></path>
+      </svg>
+    </div>
+
+    <div class="grid-2">
+      <div class="panel">
+        <h3>Почему runtime последовательный</h3>
+        <p>
+          Команды всех клиентов попадают в bounded room input queue. Один runtime goroutine владеет
+          <code>RoomState</code>, поэтому состояние не мутируется конкурентно. Принятая команда
+          увеличивает revision ровно на один.
+        </p>
+      </div>
+      <div class="panel">
+        <h3>Почему клиенты видят один порядок</h3>
+        <p>
+          Runtime строит один <code>StateDelta</code> после применения команды и отправляет тот же
+          envelope всем joined sessions. Клиент не сообщает новый state, он сообщает только intent.
+        </p>
+      </div>
+    </div>
+
+    <h2>6. Reconnect, snapshot и replay</h2>
+    <p>
+      Клиент хранит последнюю примененную revision. При <code>JoinRoomRequest</code> сервер сравнивает
+      <code>last_seen_revision</code> с текущей revision комнаты. Если они равны, достаточно
+      <code>JoinRoomOk</code>. Если нет - сервер отправляет <code>StateSnapshot</code>.
+    </p>
+    <p>
+      Event log нужен для восстановления state из server-side истории: <code>RoomCreated</code>,
+      затем <code>IntAdded</code> и <code>IntSet</code>. Join, snapshot sent и disconnect остаются
+      audit events, но не меняют integer value.
+    </p>
+
+    <div class="footer"><span>Ruleshift overview</span><span>4</span></div>
+  </section>
+
+  <section class="page">
+    <h2>7. Backpressure и slow consumers</h2>
+    <p>
+      Hot path не должен блокироваться на сетевые записи. Поэтому gateway session имеет bounded
+      outbound queue, а WebSocket writer loop дренирует ее отдельно от room runtime. Если клиент
+      читает медленно, runtime сначала пытается заменить накопившиеся deltas свежим snapshot.
+      Если проблема повторяется, session закрывается как <code>slow_consumer</code>.
+    </p>
+
+    <div class="diagram">
+      <svg viewBox="0 0 980 290" role="img" aria-label="Backpressure diagram">
+        <defs>
+          <marker id="arrow5" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#597083"></path>
+          </marker>
+        </defs>
+        <rect x="50" y="45" width="160" height="58" rx="8" class="box-green"></rect>
+        <text x="130" y="69" text-anchor="middle" class="label">RoomRuntime</text>
+        <text x="130" y="87" text-anchor="middle" class="small">non-blocking send</text>
+
+        <rect x="290" y="45" width="170" height="58" rx="8" class="box-blue"></rect>
+        <text x="375" y="69" text-anchor="middle" class="label">Outbound queue</text>
+        <text x="375" y="87" text-anchor="middle" class="small">bounded per session</text>
+
+        <rect x="540" y="45" width="170" height="58" rx="8" class="box"></rect>
+        <text x="625" y="69" text-anchor="middle" class="label">Writer loop</text>
+        <text x="625" y="87" text-anchor="middle" class="small">network write</text>
+
+        <rect x="790" y="45" width="140" height="58" rx="8" class="box-blue"></rect>
+        <text x="860" y="69" text-anchor="middle" class="label">Client</text>
+        <text x="860" y="87" text-anchor="middle" class="small">may be slow</text>
+
+        <path d="M210 74 L290 74" class="arrow"></path>
+        <path d="M460 74 L540 74" class="arrow"></path>
+        <path d="M710 74 L790 74" class="arrow"></path>
+
+        <rect x="275" y="175" width="190" height="55" rx="8" class="box-gold"></rect>
+        <text x="370" y="198" text-anchor="middle" class="label">Queue full</text>
+        <text x="370" y="216" text-anchor="middle" class="small">compact deltas to snapshot</text>
+
+        <rect x="585" y="175" width="190" height="55" rx="8" class="box-red"></rect>
+        <text x="680" y="198" text-anchor="middle" class="label">Repeated overflow</text>
+        <text x="680" y="216" text-anchor="middle" class="small">close slow consumer</text>
+
+        <path d="M375 103 L370 175" class="arrow dashed"></path>
+        <path d="M465 202 L585 202" class="arrow dashed"></path>
+      </svg>
+    </div>
+
+    <div class="grid-2">
+      <div class="panel tint">
+        <h3>Что это защищает</h3>
+        <ul>
+          <li>Room runtime не зависает на одном плохом socket.</li>
+          <li>Очереди bounded, значит нет бесконечного роста памяти.</li>
+          <li>Snapshot recovery дает клиенту компактную актуальную картину state.</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <h3>Что можно улучшить дальше</h3>
+        <ul>
+          <li>Добавить ring buffer deltas для catch-up без full snapshot.</li>
+          <li>Вынести Prometheus counters для queue full и disconnect reasons.</li>
+          <li>Сделать registry cleanup закрытых или пустых rooms.</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2>8. Производительность: текущие ориентиры</h2>
+    <p>
+      Ниже не SLA, а quick orientation по последнему benchmark-прогону на Windows amd64,
+      Intel i5-9400F. Важен порядок величин: command reducer без аллокаций, protobuf codec
+      в микросекундной зоне, orchestration layer дороже из-за maps, ids и lifecycle events.
+    </p>
+
+    <div class="keep">
+      <div class="metric-row">
+        <div>Apply int command</div>
+        <div class="bar-track"><div class="bar" style="width: 8%;"></div></div>
+        <div>33.55 ns</div>
+      </div>
+      <div class="metric-row">
+        <div>Client codec</div>
+        <div class="bar-track"><div class="bar" style="width: 18%;"></div></div>
+        <div>836.8 ns</div>
+      </div>
+      <div class="metric-row">
+        <div>Server codec</div>
+        <div class="bar-track"><div class="bar" style="width: 20%;"></div></div>
+        <div>1046 ns</div>
+      </div>
+      <div class="metric-row">
+        <div>Runtime submit</div>
+        <div class="bar-track"><div class="bar" style="width: 28%;"></div></div>
+        <div>2015 ns</div>
+      </div>
+      <div class="metric-row">
+        <div>Ticket + match</div>
+        <div class="bar-track"><div class="bar" style="width: 52%;"></div></div>
+        <div>13.52 us</div>
+      </div>
+      <div class="metric-row">
+        <div>Allocator reserve</div>
+        <div class="bar-track"><div class="bar" style="width: 90%;"></div></div>
+        <div>127.3 us</div>
+      </div>
+    </div>
+
+    <div class="footer"><span>Ruleshift overview</span><span>5</span></div>
+  </section>
+
+  <section class="page">
+    <h2>9. Как быстро разобраться в коде</h2>
+    <p>
+      Если открыть проект впервые, лучше читать не сверху вниз по директориям, а по двум потокам:
+      "игрок подключается к room" и "игрок получает assignment". Так проще увидеть границы пакетов.
+    </p>
+
+    <div class="grid-2">
+      <div class="panel">
+        <h3>Поток room MVP</h3>
+        <ol>
+          <li><code>cmd/gateway/main.go</code> - HTTP wiring, config, shutdown.</li>
+          <li><code>internal/gateway/gateway.go</code> - WebSocket protocol state machine.</li>
+          <li><code>internal/gateway/session.go</code> - bounded outbound session queue.</li>
+          <li><code>internal/room/runtime.go</code> - actor-like room runtime.</li>
+          <li><code>internal/room/command.go</code> - reducer for Add/Set.</li>
+          <li><code>internal/protocol/proto/ruleshift.proto</code> - wire contract.</li>
+        </ol>
+      </div>
+      <div class="panel">
+        <h3>Поток matchmaking</h3>
+        <ol>
+          <li><code>internal/matchmaking/service.go</code> - ticket/match/assignment lifecycle.</li>
+          <li><code>internal/allocator/allocator.go</code> - server pool and seat reservation.</li>
+          <li><code>internal/connecttoken/token.go</code> - signed token generation/validation.</li>
+          <li><code>internal/matchmaking/service_test.go</code> - cancellation, failure, TTL, concurrent assign.</li>
+          <li><code>internal/allocator/allocator_test.go</code> - atomic reservation and cleanup.</li>
+        </ol>
+      </div>
+    </div>
+
+    <h2>10. Operational surface</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Endpoint / config</th>
+          <th>Зачем нужен</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>/healthz</code></td>
+          <td>Простой liveness check: процесс отвечает.</td>
+        </tr>
+        <tr>
+          <td><code>/readyz</code></td>
+          <td>Readiness check: gateway готов принимать запросы.</td>
+        </tr>
+        <tr>
+          <td><code>/metrics</code></td>
+          <td>Минимальный text endpoint: <code>ruleshift_up</code> и <code>ruleshift_rooms</code>.</td>
+        </tr>
+        <tr>
+          <td><code>/ws</code></td>
+          <td>WebSocket endpoint для protobuf room protocol.</td>
+        </tr>
+        <tr>
+          <td><code>RULESHIFT_ROOM_INPUT_QUEUE_SIZE</code></td>
+          <td>Размер bounded queue команд на комнату.</td>
+        </tr>
+        <tr>
+          <td><code>RULESHIFT_SESSION_SEND_QUEUE_SIZE</code></td>
+          <td>Размер bounded outbound queue на WebSocket session.</td>
+        </tr>
+        <tr>
+          <td><code>RULESHIFT_SHUTDOWN_TIMEOUT</code></td>
+          <td>Deadline graceful shutdown для HTTP server и gateway close.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>11. Что проверено тестами</h2>
+    <div class="grid-3">
+      <div class="metric"><strong>Room</strong>linear revisions, broadcasts, invalid commands, slow consumers, shutdown</div>
+      <div class="metric"><strong>Gateway</strong>auth-first flow, join, snapshots, reconnect, ping/pong</div>
+      <div class="metric"><strong>Orchestration</strong>ticket cancel, match, allocation, TTL, token, failure, concurrency</div>
+    </div>
+
+    <div class="footer"><span>Ruleshift overview</span><span>6</span></div>
+  </section>
+
+  <section class="page">
+    <h2>12. Как выглядит полный будущий flow</h2>
+    <ol>
+      <li>Разработчик регистрирует игру и build. Пока durable registry не реализован, allocator получает server records in-memory.</li>
+      <li>Клиент создает ticket: <code>game_id</code>, <code>build_id</code>, <code>player_id</code>, optional idempotency key.</li>
+      <li>Matcher группирует queued tickets одного game/build pool в match.</li>
+      <li>Allocator атомарно резервирует seats на подходящем server instance.</li>
+      <li>Сервис создает assignment для каждого игрока и выдает endpoint + connect token.</li>
+      <li>Game server проверяет token через token manager или будущий validation endpoint.</li>
+      <li>После принятия игрока lifecycle идет в <code>connecting</code>, затем <code>in_game</code>.</li>
+      <li>Когда игра заканчивается, reservation освобождается, match становится <code>ended</code>.</li>
+    </ol>
+
+    <div class="diagram">
+      <svg viewBox="0 0 980 320" role="img" aria-label="Future end to end flow">
+        <defs>
+          <marker id="arrow6" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#597083"></path>
+          </marker>
+        </defs>
+        <rect x="40" y="45" width="140" height="55" rx="8" class="box"></rect>
+        <text x="110" y="68" text-anchor="middle" class="label">Developer</text>
+        <text x="110" y="86" text-anchor="middle" class="small">register build</text>
+
+        <rect x="235" y="45" width="140" height="55" rx="8" class="box-blue"></rect>
+        <text x="305" y="68" text-anchor="middle" class="label">Client</text>
+        <text x="305" y="86" text-anchor="middle" class="small">create ticket</text>
+
+        <rect x="430" y="45" width="140" height="55" rx="8" class="box-green"></rect>
+        <text x="500" y="68" text-anchor="middle" class="label">Ruleshift</text>
+        <text x="500" y="86" text-anchor="middle" class="small">match + assign</text>
+
+        <rect x="625" y="45" width="140" height="55" rx="8" class="box-gold"></rect>
+        <text x="695" y="68" text-anchor="middle" class="label">Game server</text>
+        <text x="695" y="86" text-anchor="middle" class="small">validate token</text>
+
+        <rect x="820" y="45" width="120" height="55" rx="8" class="box-green"></rect>
+        <text x="880" y="68" text-anchor="middle" class="label">Session</text>
+        <text x="880" y="86" text-anchor="middle" class="small">in_game</text>
+
+        <path d="M180 72 L235 72" class="arrow dashed"></path>
+        <path d="M375 72 L430 72" class="arrow"></path>
+        <path d="M570 72 L625 72" class="arrow"></path>
+        <path d="M765 72 L820 72" class="arrow"></path>
+
+        <rect x="215" y="190" width="185" height="55" rx="8" class="box-blue"></rect>
+        <text x="308" y="213" text-anchor="middle" class="label">Assignment response</text>
+        <text x="308" y="231" text-anchor="middle" class="small">endpoint, match_id, token</text>
+
+        <rect x="585" y="190" width="210" height="55" rx="8" class="box"></rect>
+        <text x="690" y="213" text-anchor="middle" class="label">Diagnostics</text>
+        <text x="690" y="231" text-anchor="middle" class="small">events, logs, metrics, reasons</text>
+
+        <path d="M500 100 C480 150 400 165 308 190" class="arrow dashed"></path>
+        <path d="M695 100 C700 150 700 165 690 190" class="arrow dashed"></path>
+      </svg>
+    </div>
+
+    <h2>13. Следующие PR</h2>
+    <div class="grid-2">
+      <div class="panel tint">
+        <h3>Самый полезный следующий шаг</h3>
+        <p>
+          Подключить public API: create/cancel ticket, poll assignment, validate token,
+          game server heartbeat, mark in_game, end/fail session. Это превратит внутренний
+          lifecycle layer в настоящий продуктовый контур.
+        </p>
+      </div>
+      <div class="panel">
+        <h3>После API</h3>
+        <p>
+          Добавить durable storage, real server launcher, Prometheus metrics, pprof, load test
+          execution и Steam auth implementation. Тогда система будет готова к более честной
+          production-like демонстрации.
+        </p>
+      </div>
+    </div>
+
+    <p class="muted">
+      Итог: текущий Ruleshift уже показывает ключевые системные идеи: authoritative state,
+      bounded queues, deterministic ordering, recovery snapshots, lifecycle audit и atomic
+      allocation. Главная недостающая часть - публичный API и durability вокруг нового
+      orchestration layer.
+    </p>
+
+    <div class="footer"><span>Ruleshift overview</span><span>7</span></div>
+  </section>
+</body>
+</html>

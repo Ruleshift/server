@@ -28,6 +28,8 @@ Ruleshift is an authoritative multiplayer state server. The future domain is a S
 Phase 5 gateway behavior:
 
 - `/healthz` returns a simple HTTP health response;
+- `/readyz` returns a simple readiness response;
+- optional `/metrics` returns a minimal text-format process and room-count signal;
 - `/ws` upgrades to WebSocket;
 - WebSocket messages are binary;
 - binary payloads are protobuf envelopes serialized directly with the generated protobuf runtime;
@@ -41,6 +43,29 @@ Phase 5 gateway behavior:
 ### Auth
 
 `internal/auth` exposes a small `Provider` interface. Room logic receives server-side player identity only after successful authentication. Steam integration remains replaceable and is not coupled to room state.
+
+### Matchmaking
+
+`internal/matchmaking` owns the new ticket-to-assignment orchestration model. It keeps in-memory indexes for queued tickets by game/build pool, active tickets by player/pool, idempotency keys, matches, assignments, and lifecycle audit events. The state machine follows `queued -> matched -> allocating -> assigned -> connecting -> in_game -> ended`, with terminal `failed`, `canceled`, and `expired` states.
+
+Current behavior:
+
+- ticket creation is idempotent by explicit key and by active player/game/build ticket;
+- queued tickets can be canceled by the owning player;
+- match formation consumes only queued tickets from the same game/build pool;
+- assignment TTL expiration fails the match and releases server reservations;
+- server failure marks affected assigned matches as failed;
+- lifecycle events include ticket, match, server, and player identifiers, but never full connect tokens.
+
+This layer is not wired to public API handlers yet; it is ready to sit behind HTTP or protobuf endpoints in a later iteration.
+
+### Allocator
+
+`internal/allocator` owns in-memory server registration and atomic seat reservation. It indexes servers by game/build pool and performs reserve/release under one mutex, so a server seat cannot be assigned to two matches. Reservation retry is idempotent by `match_id`, and reservation TTL cleanup releases seats.
+
+### Connect Tokens
+
+`internal/connecttoken` creates and validates HMAC-signed connect tokens. A token contains assignment, match, server, player, and expiry claims. Validation rejects expired, malformed, or tampered tokens before the game server accepts a connection.
 
 ### Protocol
 

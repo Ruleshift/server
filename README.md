@@ -28,10 +28,13 @@ The server is authoritative: clients send intent, the server decides ordering, a
 Implemented in this iteration:
 
 - Go module and reviewable project skeleton.
-- `cmd/gateway` entrypoint with config loading, structured logging, `/healthz`, and `/ws`.
+- `cmd/gateway` entrypoint with config loading, structured logging, `/healthz`, `/readyz`, optional minimal `/metrics`, graceful shutdown, and `/ws`.
 - `cmd/client` CLI client for manual protobuf WebSocket testing from a terminal.
 - `cmd/botload` entrypoint with planned load-test flags.
 - Auth interfaces with local mock provider and Steam Web API provider skeleton.
+- In-memory matchmaking orchestration layer with ticket creation, idempotency, cancellation, match formation, assignment TTL, lifecycle transitions, and event audit records.
+- Atomic in-memory game server allocator with indexed game/build pools, seat reservations, reservation TTL cleanup, idempotent reservation retry by match id, and server failure handling.
+- HMAC-signed connect tokens with assignment, match, server, player, and expiry claims.
 - Authoritative room state with `int64` value, monotonic `uint64` revision, Add/Set command apply logic, snapshots, deltas, and registry.
 - Actor-like `RoomRuntime` owns state, accepts commands through a bounded queue, registers room-local delta subscribers, and broadcasts the same delta to joined clients.
 - Gateway-owned websocket sessions implement `room.PlayerSink` with bounded outbound queues, non-blocking send, snapshot compaction for lagging clients, repeated slow-consumer disconnects, and graceful shutdown close.
@@ -48,7 +51,10 @@ Implemented in this iteration:
 
 Not implemented yet:
 
-- Prometheus metrics and pprof endpoints.
+- Public matchmaking HTTP/protobuf API handlers wired into `cmd/gateway`.
+- Durable game/build registry and durable matchmaking/session storage.
+- Real game server launcher or container allocator.
+- Full Prometheus metrics and pprof endpoints.
 - Bot load execution against the gateway.
 - Card game mechanics. These are intentionally out of scope for the MVP.
 
@@ -71,6 +77,8 @@ Health check:
 
 ```powershell
 Invoke-WebRequest http://localhost:8080/healthz
+Invoke-WebRequest http://localhost:8080/readyz
+Invoke-WebRequest http://localhost:8080/metrics
 ```
 
 WebSocket endpoint:
@@ -106,8 +114,19 @@ Environment variables:
 | `RULESHIFT_AUTH_TIMEOUT` | `5s` | Auth deadline |
 | `RULESHIFT_READ_TIMEOUT` | `30s` | HTTP read timeout |
 | `RULESHIFT_WRITE_TIMEOUT` | `30s` | HTTP write timeout |
-| `RULESHIFT_ENABLE_METRICS` | `true` | Future `/metrics` toggle |
+| `RULESHIFT_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown deadline |
+| `RULESHIFT_ENABLE_METRICS` | `true` | Enable minimal `/metrics` endpoint |
 | `RULESHIFT_ENABLE_PPROF` | `false` | Future pprof toggle |
+
+## Matchmaking And Assignment Flow
+
+The new orchestration layer is currently an internal Go package, ready to be exposed by future API handlers:
+
+1. Create a ticket with `game_id`, `build_id`, `player_id`, optional idempotency key, and TTL.
+2. The matcher groups queued tickets from the same game/build pool into a match.
+3. The allocator atomically reserves server seats and creates player assignments.
+4. Each assignment returns `endpoint`, `match_id`, `server_id`, and a signed connect token.
+5. The game server validates the connect token before accepting the player, then reports lifecycle progress toward `connecting`, `in_game`, and `ended` or `failed`.
 
 ## Protocol Direction
 

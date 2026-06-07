@@ -1,0 +1,72 @@
+name: Publish and Deploy Gateway
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ruleshift-production
+  cancel-in-progress: true
+
+jobs:
+  build-test-push-deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout server
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      - name: Test
+        run: go test ./...
+
+      - name: Set image tags
+        id: meta
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/ruleshift/server-gateway" >> "$GITHUB_OUTPUT"
+
+      - name: Login to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+          docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build image
+        run: |
+          docker build \
+            -t ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.short_sha }} \
+            -t ${{ steps.meta.outputs.image }}:${{ github.sha }} \
+            -t ${{ steps.meta.outputs.image }}:latest \
+            .
+
+      - name: Push image
+        run: |
+          docker push ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.short_sha }}
+          docker push ${{ steps.meta.outputs.image }}:${{ github.sha }}
+          docker push ${{ steps.meta.outputs.image }}:latest
+
+      - name: Deploy on VPS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            set -euo pipefail
+            cd /opt/ruleshift/deploy
+            git pull
+            ./scripts/deploy.sh ${{ steps.meta.outputs.short_sha }}

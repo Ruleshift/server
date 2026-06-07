@@ -16,6 +16,7 @@ type Config struct {
 	AuthTimeout          time.Duration
 	ReadTimeout          time.Duration
 	WriteTimeout         time.Duration
+	ShutdownTimeout      time.Duration
 	EnableMetrics        bool
 	EnablePprof          bool
 }
@@ -30,6 +31,7 @@ func Load() (Config, error) {
 		AuthTimeout:          5 * time.Second,
 		ReadTimeout:          30 * time.Second,
 		WriteTimeout:         30 * time.Second,
+		ShutdownTimeout:      10 * time.Second,
 		EnableMetrics:        true,
 		EnablePprof:          false,
 	}
@@ -51,6 +53,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.WriteTimeout, err = envDuration("RULESHIFT_WRITE_TIMEOUT", cfg.WriteTimeout); err != nil {
+		return Config{}, err
+	}
+	if cfg.ShutdownTimeout, err = envDuration("RULESHIFT_SHUTDOWN_TIMEOUT", cfg.ShutdownTimeout); err != nil {
 		return Config{}, err
 	}
 	if cfg.EnableMetrics, err = envBool("RULESHIFT_ENABLE_METRICS", cfg.EnableMetrics); err != nil {
@@ -87,6 +92,9 @@ func (c Config) Validate() error {
 	}
 	if c.WriteTimeout <= 0 {
 		return fmt.Errorf("RULESHIFT_WRITE_TIMEOUT must be positive")
+	}
+	if c.ShutdownTimeout <= 0 {
+		return fmt.Errorf("RULESHIFT_SHUTDOWN_TIMEOUT must be positive")
 	}
 	return nil
 }

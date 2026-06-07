@@ -16,6 +16,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.RoomInputQueueSize <= 0 {
 		t.Fatalf("RoomInputQueueSize = %d, want positive", cfg.RoomInputQueueSize)
 	}
+	if cfg.ShutdownTimeout <= 0 {
+		t.Fatalf("ShutdownTimeout = %s, want positive", cfg.ShutdownTimeout)
+	}
 }
 
 func TestLoadRejectsInvalidInt(t *testing.T) {
@@ -23,5 +26,13 @@ func TestLoadRejectsInvalidInt(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("Load returned nil error for invalid integer")
+	}
+}
+
+func TestLoadRejectsInvalidDuration(t *testing.T) {
+	t.Setenv("RULESHIFT_SHUTDOWN_TIMEOUT", "not-a-duration")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load returned nil error for invalid duration")
 	}
 }
