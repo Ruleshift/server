@@ -74,6 +74,41 @@ go run ./cmd/client -addr ws://192.168.1.50:8080/ws -ticket mock:player-2 -room 
 
 Client A should print the same ordered `revision` stream produced by the server.
 
+## Interactive Console
+
+For repeated manual checks, use the interactive console instead of retyping the long command line.
+
+Build it once:
+
+```powershell
+go build -o ruleshift-console.exe ./cmd/console
+```
+
+Open client A:
+
+```powershell
+.\ruleshift-console.exe -addr ws://147.45.211.122:8080/ws -ticket mock:player-1 -room demo
+```
+
+Open client B in another terminal:
+
+```powershell
+.\ruleshift-console.exe -addr ws://147.45.211.122:8080/ws -ticket mock:player-2 -room demo
+```
+
+Inside either console, use short commands:
+
+```text
+get
+add 10
+set 42
+room demo-2
+status
+quit
+```
+
+Both clients stay connected and print snapshots or deltas from the room as the server broadcasts them.
+
 ## Revision Checks
 
 By default, Add/Set uses `expected_revision=0`, which means a blind authoritative update accepted by the server.
