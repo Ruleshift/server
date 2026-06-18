@@ -2,7 +2,7 @@
 
 Ruleshift is a production-like Go backend for a future Steam-compatible Unity C# multiplayer card game.
 
-The MVP is deliberately not a card game. It is an authoritative multiplayer state server that replicates one shared `int64` value per room through binary protobuf messages over WebSocket.
+The MVP is deliberately still not the final card game. It is now an authoritative multiplayer room server that runs a pluggable game module; the current module is Xiangqi, backed by `github.com/laines-it/xiangqi-go` through its declared Go module path.
 
 ## Why This Is Not CRUD
 
@@ -16,7 +16,7 @@ flowchart LR
     Gateway --> Auth["mock / Steam-compatible auth"]
     Auth --> RoomQueue["bounded room command queue"]
     RoomQueue --> Runtime["sequential RoomRuntime"]
-    Runtime --> State["int64 value + revision"]
+    Runtime --> State["game state + revision"]
     State --> Broadcast["protobuf ServerEnvelope broadcast"]
     Broadcast --> Unity
 ```
@@ -35,18 +35,19 @@ Implemented in this iteration:
 - In-memory matchmaking orchestration layer with ticket creation, idempotency, cancellation, match formation, assignment TTL, lifecycle transitions, and event audit records.
 - Atomic in-memory game server allocator with indexed game/build pools, seat reservations, reservation TTL cleanup, idempotent reservation retry by match id, and server failure handling.
 - HMAC-signed connect tokens with assignment, match, server, player, and expiry claims.
-- Authoritative room state with `int64` value, monotonic `uint64` revision, Add/Set command apply logic, snapshots, deltas, and registry.
+- Authoritative room state with pluggable game state, monotonic `uint64` revision, game command apply logic, snapshots, deltas, and registry.
+- Xiangqi module using the Go engine for legal move generation and `DoMove`, with first/second joined players seated as red/black.
 - Actor-like `RoomRuntime` owns state, accepts commands through a bounded queue, registers room-local delta subscribers, and broadcasts the same delta to joined clients.
 - Gateway-owned websocket sessions implement `room.PlayerSink` with bounded outbound queues, non-blocking send, snapshot compaction for lagging clients, repeated slow-consumer disconnects, and graceful shutdown close.
-- WebSocket gateway on `/ws` using Gorilla WebSocket with binary protobuf envelopes, mock auth, join room, snapshots, Add/Set commands, delta broadcast, app-level ping/pong, and basic client sequence checks.
+- WebSocket gateway on `/ws` using Gorilla WebSocket with binary protobuf envelopes, mock auth, join room, snapshots, `DoMove`/`Resign`/`OfferDraw` commands, delta broadcast, app-level ping/pong, and basic client sequence checks.
 - Reconnect/resume for rooms: `JoinRoomRequest.last_seen_revision` is compared with the authoritative room revision, stale clients receive a `StateSnapshot`, and reconnecting with the same authenticated `player_id` replaces the old session.
-- Append-only room event log with sequence-numbered `RoomEvent` records, `InMemoryEventStore`, and replay that restores integer state from Add/Set events.
+- Append-only room event log with sequence-numbered `RoomEvent` records, `InMemoryEventStore`, and replay that restores game state by reapplying module commands.
 - Unity-compatible C# network skeleton with `MatchClient`, `ProtocolCodec`, mock auth tickets, generated protobuf bindings, and reconnect using `lastSeenRevision`.
 - Protobuf schema in `internal/protocol/proto/ruleshift.proto`.
 - Generated Go and C# protobuf bindings.
 - Direct protobuf encode/decode through generated Go and C# bindings.
 - Makefile targets for Go and C# protobuf generation.
-- Unit and integration tests for mock auth, config, protobuf WebSocket gateway flows, bounded send queues, integer command apply, room broadcast, invalid commands, concurrent command ordering, slow consumers, and runtime shutdown.
+- Unit and integration tests for mock auth, config, protobuf WebSocket gateway flows, bounded send queues, game command apply, room broadcast, invalid commands, concurrent command ordering, slow consumers, and runtime shutdown.
 - Documentation for architecture, protocol, Steam integration, Unity integration, and performance plan.
 
 Not implemented yet:
@@ -56,7 +57,7 @@ Not implemented yet:
 - Real game server launcher or container allocator.
 - Full Prometheus metrics and pprof endpoints.
 - Bot load execution against the gateway.
-- Card game mechanics. These are intentionally out of scope for the MVP.
+- Card game mechanics. These are intentionally out of scope for this MVP.
 
 ## Run
 
@@ -81,6 +82,8 @@ Invoke-WebRequest http://localhost:8080/readyz
 Invoke-WebRequest http://localhost:8080/metrics
 ```
 
+Docker VPS deploy notes: [docs/vps-deploy.md](docs/vps-deploy.md).
+
 WebSocket endpoint:
 
 ```text
@@ -91,10 +94,18 @@ Manual CLI checks:
 
 ```powershell
 go run ./cmd/client -addr ws://localhost:8080/ws -ticket mock:player-1 -room demo -op get
-go run ./cmd/client -addr ws://localhost:8080/ws -ticket mock:player-1 -room demo -op add -value 5
-go run ./cmd/client -addr ws://localhost:8080/ws -ticket mock:player-2 -room demo -op set -value 42
+go run ./cmd/client -addr ws://localhost:8080/ws -ticket mock:player-1 -room demo -op move -move h2e2
 go run ./cmd/client -addr ws://localhost:8080/ws -ticket mock:watcher -room demo -op watch
 ```
+
+Interactive console for repeated checks:
+
+```powershell
+go run ./cmd/console -addr ws://localhost:8080/ws -ticket mock:player-1 -room demo
+```
+
+Then type short commands such as `get`, `move h2e2`, `resign`, `draw`, `room demo-2`, or `status`.
+Windows packaging notes: [docs/client-packaging.md](docs/client-packaging.md).
 
 For a LAN server started with `RULESHIFT_ADDR=0.0.0.0:8080`, replace `localhost` with the server IPv4 address, for example `ws://192.168.1.50:8080/ws`.
 
@@ -147,7 +158,7 @@ The script prepends the WinGet-installed `protoc.exe` path for the current run, 
 1. Phase 0: repository discovery, architecture plan, documentation, project structure.
 2. Phase 1: Go skeleton, config, structured logging, entrypoints, package boundaries.
 3. Phase 2: protobuf generation and direct protobuf wire payloads.
-4. Phase 3: authoritative integer room model and reducer tests.
+4. Phase 3: authoritative game room model and reducer tests.
 5. Phase 4: actor-like room runtime, bounded queues, slow consumer behavior.
 6. Phase 5: WebSocket gateway integration tests.
 7. Phase 6: Steam-compatible authentication implementation and httptest coverage.

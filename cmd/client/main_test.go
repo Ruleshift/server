@@ -10,11 +10,12 @@ import (
 	"time"
 
 	"github.com/Ruleshift/server/internal/auth"
+	"github.com/Ruleshift/server/internal/game/xiangqi"
 	"github.com/Ruleshift/server/internal/gateway"
 	"github.com/Ruleshift/server/internal/room"
 )
 
-func TestRunGetAddSet(t *testing.T) {
+func TestRunGetMove(t *testing.T) {
 	addr, registry, cleanup := startTestGateway(t)
 	defer cleanup()
 
@@ -26,19 +27,11 @@ func TestRunGetAddSet(t *testing.T) {
 		t.Fatalf("get failed: %v", err)
 	}
 
-	add := base
-	add.op = "add"
-	add.value = 5
-	if err := run(context.Background(), add); err != nil {
-		t.Fatalf("add failed: %v", err)
-	}
-
-	set := base
-	set.ticket = "mock:player-2"
-	set.op = "set"
-	set.value = 42
-	if err := run(context.Background(), set); err != nil {
-		t.Fatalf("set failed: %v", err)
+	move := base
+	move.op = "move"
+	move.move = "h2e2"
+	if err := run(context.Background(), move); err != nil {
+		t.Fatalf("move failed: %v", err)
 	}
 
 	runtime, _, err := registry.GetOrCreate(base.roomID)
@@ -51,18 +44,25 @@ func TestRunGetAddSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("snapshot failed: %v", err)
 	}
-	if snapshot.Value != 42 {
-		t.Fatalf("unexpected final value: got=%d want=42", snapshot.Value)
+	xSnapshot, ok := xiangqi.SnapshotPayload(snapshot.Game)
+	if !ok {
+		t.Fatalf("snapshot payload = %T, want xiangqi.Snapshot", snapshot.Game.Payload)
 	}
-	if snapshot.Revision != 2 {
-		t.Fatalf("unexpected final revision: got=%d want=2", snapshot.Revision)
+	if xSnapshot.FEN == "" {
+		t.Fatal("snapshot FEN is empty")
+	}
+	if snapshot.Game.StateHash == 0 {
+		t.Fatal("snapshot state hash is zero after move")
+	}
+	if snapshot.Revision != 1 {
+		t.Fatalf("unexpected final revision: got=%d want=1", snapshot.Revision)
 	}
 }
 
 func startTestGateway(t *testing.T) (string, *room.Registry, func()) {
 	t.Helper()
 
-	registry := room.NewRegistry(room.RuntimeConfig{InputQueueSize: 16})
+	registry := room.NewRegistry(room.RuntimeConfig{InputQueueSize: 16, GameModule: xiangqi.NewModule()})
 	handler, err := gateway.New(gateway.Config{
 		MaxMessageBytes:      defaultMaxMessageBytes,
 		SessionSendQueueSize: 16,

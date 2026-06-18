@@ -31,10 +31,20 @@ option csharp_namespace = "Ruleshift.Protocol.V1";
 Room state is:
 
 - `room_id`
-- `value int64`
 - `revision uint64`
+- module-owned game state. The current `GAME_TYPE_XIANGQI` snapshot includes FEN, packed board pieces, side to move, seated player ids, game status, and state hash.
 
-Every accepted command increments revision by exactly one. Clients observe ordered deltas or a recovery snapshot.
+Every accepted `GameCommand` increments revision by exactly one. Clients observe ordered `StateDelta` messages or a recovery `StateSnapshot`.
+
+## Game Commands
+
+Clients send `GameCommand` after auth and room join:
+
+- `DoMove` carries either compact square indexes (`from_square`, `to_square`, 0..89) or a UCI-style move string such as `h2e2`.
+- `Resign` marks the game resigned and records the winner when the player is seated.
+- `OfferDraw` records a draw offer; a later opponent offer accepts the draw.
+
+The room runtime validates `room_id` and `expected_revision`. The Xiangqi module validates seating, side to move, and legal moves through the engine before mutating state.
 
 ## Join And Resume
 
@@ -85,7 +95,7 @@ Oversized WebSocket frames are rejected by the transport. Malformed protobuf pay
 - missing payload;
 - unexpected payload for the connection state;
 - empty room IDs or auth tickets;
-- invalid integer operation;
+- invalid or illegal game command;
 - stale replaced sessions;
 - stale or mismatched room revisions.
 

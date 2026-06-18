@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/Ruleshift/server/internal/auth"
+	"github.com/Ruleshift/server/internal/game"
+	"github.com/Ruleshift/server/internal/game/xiangqi"
 	"github.com/Ruleshift/server/internal/protocol"
 	ruleshiftv1 "github.com/Ruleshift/server/internal/protocol/generated/go/ruleshiftv1"
 	"github.com/Ruleshift/server/internal/room"
@@ -52,25 +54,15 @@ func TestGatewayAuthJoinAndBroadcastDelta(t *testing.T) {
 	authAndJoin(t, player1, "player-1", "room-1")
 	authAndJoin(t, player2, "player-2", "room-1")
 
-	player1.Send(t, &ruleshiftv1.ClientEnvelope{
-		ProtocolVersion: protocol.CurrentVersion,
-		ClientSequence:  3,
-		Payload: &ruleshiftv1.ClientEnvelope_IntCommand{
-			IntCommand: &ruleshiftv1.IntCommand{
-				RoomId:    "room-1",
-				Operation: ruleshiftv1.IntOperation_INT_OPERATION_ADD,
-				Value:     5,
-			},
-		},
-	})
+	player1.Send(t, gameMoveEnvelope(3, "room-1", "a0a1"))
 
 	delta1 := readDelta(t, player1)
 	delta2 := readDelta(t, player2)
 	if delta1.String() != delta2.String() {
 		t.Fatalf("players received different deltas:\n%#v\n%#v", delta1, delta2)
 	}
-	if delta1.GetNewValue() != 5 || delta1.GetNewRevision() != 1 || delta1.GetChangedByPlayerId() != "player-1" {
-		t.Fatalf("delta = %#v, want value 5 revision 1 by player-1", delta1)
+	if delta1.GetXiangqi().GetStateHash() != 1 || delta1.GetNewRevision() != 1 || delta1.GetChangedByPlayerId() != "player-1" {
+		t.Fatalf("delta = %#v, want hash 1 revision 1 by player-1", delta1)
 	}
 }
 
@@ -115,17 +107,7 @@ func TestGatewayNewClientReceivesSnapshotAfterStateChange(t *testing.T) {
 	defer player1.Close()
 
 	authAndJoin(t, player1, "player-1", "room-1")
-	player1.Send(t, &ruleshiftv1.ClientEnvelope{
-		ProtocolVersion: protocol.CurrentVersion,
-		ClientSequence:  3,
-		Payload: &ruleshiftv1.ClientEnvelope_IntCommand{
-			IntCommand: &ruleshiftv1.IntCommand{
-				RoomId:    "room-1",
-				Operation: ruleshiftv1.IntOperation_INT_OPERATION_SET,
-				Value:     42,
-			},
-		},
-	})
+	player1.Send(t, gameMoveEnvelope(3, "room-1", "a0a1"))
 	_ = readDelta(t, player1)
 
 	player2 := dialTestWebSocket(t, server.URL)
@@ -149,8 +131,8 @@ func TestGatewayNewClientReceivesSnapshotAfterStateChange(t *testing.T) {
 	if snapshot == nil {
 		t.Fatalf("snapshot payload = nil, want StateSnapshot")
 	}
-	if snapshot.GetValue() != 42 || snapshot.GetRevision() != 1 {
-		t.Fatalf("snapshot = value %d revision %d, want 42/1", snapshot.GetValue(), snapshot.GetRevision())
+	if snapshot.GetXiangqi().GetStateHash() != 1 || snapshot.GetRevision() != 1 {
+		t.Fatalf("snapshot = hash %d revision %d, want 1/1", snapshot.GetXiangqi().GetStateHash(), snapshot.GetRevision())
 	}
 }
 
@@ -162,20 +144,10 @@ func TestGatewayReconnectReplacesOldSessionAndSendsSnapshot(t *testing.T) {
 	defer oldConnection.Close()
 
 	authAndJoin(t, oldConnection, "player-1", "room-1")
-	oldConnection.Send(t, &ruleshiftv1.ClientEnvelope{
-		ProtocolVersion: protocol.CurrentVersion,
-		ClientSequence:  3,
-		Payload: &ruleshiftv1.ClientEnvelope_IntCommand{
-			IntCommand: &ruleshiftv1.IntCommand{
-				RoomId:    "room-1",
-				Operation: ruleshiftv1.IntOperation_INT_OPERATION_ADD,
-				Value:     7,
-			},
-		},
-	})
+	oldConnection.Send(t, gameMoveEnvelope(3, "room-1", "a0a1"))
 	originalDelta := readDelta(t, oldConnection)
-	if originalDelta.GetNewValue() != 7 || originalDelta.GetNewRevision() != 1 {
-		t.Fatalf("delta = value %d revision %d, want 7/1", originalDelta.GetNewValue(), originalDelta.GetNewRevision())
+	if originalDelta.GetXiangqi().GetStateHash() != 1 || originalDelta.GetNewRevision() != 1 {
+		t.Fatalf("delta = hash %d revision %d, want 1/1", originalDelta.GetXiangqi().GetStateHash(), originalDelta.GetNewRevision())
 	}
 
 	resumedConnection := dialTestWebSocket(t, server.URL)
@@ -200,37 +172,17 @@ func TestGatewayReconnectReplacesOldSessionAndSendsSnapshot(t *testing.T) {
 	if snapshot == nil {
 		t.Fatalf("resume payload = nil, want StateSnapshot")
 	}
-	if snapshot.GetValue() != 7 || snapshot.GetRevision() != 1 {
-		t.Fatalf("resume snapshot = value %d revision %d, want 7/1", snapshot.GetValue(), snapshot.GetRevision())
+	if snapshot.GetXiangqi().GetStateHash() != 1 || snapshot.GetRevision() != 1 {
+		t.Fatalf("resume snapshot = hash %d revision %d, want 1/1", snapshot.GetXiangqi().GetStateHash(), snapshot.GetRevision())
 	}
 
 	oldConnection.ExpectClosed(t)
-	_ = oldConnection.Write(&ruleshiftv1.ClientEnvelope{
-		ProtocolVersion: protocol.CurrentVersion,
-		ClientSequence:  4,
-		Payload: &ruleshiftv1.ClientEnvelope_IntCommand{
-			IntCommand: &ruleshiftv1.IntCommand{
-				RoomId:    "room-1",
-				Operation: ruleshiftv1.IntOperation_INT_OPERATION_ADD,
-				Value:     100,
-			},
-		},
-	})
+	_ = oldConnection.Write(gameMoveEnvelope(4, "room-1", "a0a1"))
 
-	resumedConnection.Send(t, &ruleshiftv1.ClientEnvelope{
-		ProtocolVersion: protocol.CurrentVersion,
-		ClientSequence:  3,
-		Payload: &ruleshiftv1.ClientEnvelope_IntCommand{
-			IntCommand: &ruleshiftv1.IntCommand{
-				RoomId:    "room-1",
-				Operation: ruleshiftv1.IntOperation_INT_OPERATION_ADD,
-				Value:     2,
-			},
-		},
-	})
+	resumedConnection.Send(t, gameMoveEnvelope(3, "room-1", "a0a1"))
 	resumedDelta := readDelta(t, resumedConnection)
-	if resumedDelta.GetNewValue() != 9 || resumedDelta.GetNewRevision() != 2 {
-		t.Fatalf("resumed delta = value %d revision %d, want 9/2", resumedDelta.GetNewValue(), resumedDelta.GetNewRevision())
+	if resumedDelta.GetXiangqi().GetStateHash() != 2 || resumedDelta.GetNewRevision() != 2 {
+		t.Fatalf("resumed delta = hash %d revision %d, want 2/2", resumedDelta.GetXiangqi().GetStateHash(), resumedDelta.GetNewRevision())
 	}
 }
 
@@ -265,7 +217,7 @@ func TestGatewayPingPong(t *testing.T) {
 func newTestGatewayServer(t *testing.T) (*httptest.Server, *Gateway) {
 	t.Helper()
 
-	registry := room.NewRegistry(room.RuntimeConfig{InputQueueSize: 128})
+	registry := room.NewRegistry(room.RuntimeConfig{InputQueueSize: 128, GameModule: gatewayTestModule{}})
 	gateway, err := New(Config{
 		MaxMessageBytes:      64 * 1024,
 		SessionSendQueueSize: 16,
@@ -324,6 +276,21 @@ func joinEnvelopeWithLastSeen(sequence uint64, roomID string, lastSeenRevision u
 			JoinRoom: &ruleshiftv1.JoinRoomRequest{
 				RoomId:           roomID,
 				LastSeenRevision: lastSeenRevision,
+			},
+		},
+	}
+}
+
+func gameMoveEnvelope(sequence uint64, roomID string, move string) *ruleshiftv1.ClientEnvelope {
+	return &ruleshiftv1.ClientEnvelope{
+		ProtocolVersion: protocol.CurrentVersion,
+		ClientSequence:  sequence,
+		Payload: &ruleshiftv1.ClientEnvelope_GameCommand{
+			GameCommand: &ruleshiftv1.GameCommand{
+				RoomId: roomID,
+				Command: &ruleshiftv1.GameCommand_DoMove{
+					DoMove: &ruleshiftv1.DoMove{MoveUci: move},
+				},
 			},
 		},
 	}
@@ -416,4 +383,62 @@ func (c *testWebSocketClient) ExpectClosed(t *testing.T) {
 	if err == nil {
 		t.Fatal("read websocket frame succeeded, want closed connection")
 	}
+}
+
+type gatewayTestModule struct{}
+
+type gatewayTestState struct {
+	moves uint64
+}
+
+func (gatewayTestModule) Type() game.Type {
+	return game.TypeXiangqi
+}
+
+func (gatewayTestModule) NewState(time.Time) (any, error) {
+	return &gatewayTestState{}, nil
+}
+
+func (gatewayTestModule) PlayerJoined(state any, _ string) (any, error) {
+	return state, nil
+}
+
+func (gatewayTestModule) Snapshot(state any) (game.Snapshot, error) {
+	testState := state.(*gatewayTestState)
+	base := game.Snapshot{
+		Type:      game.TypeXiangqi,
+		Status:    game.StatusActive,
+		StateHash: testState.moves,
+	}
+	base.Payload = xiangqi.Snapshot{
+		Snapshot:   base,
+		FEN:        "gateway-test",
+		SideToMove: xiangqi.SideRed,
+	}
+	return base, nil
+}
+
+func (gatewayTestModule) Apply(state any, command game.Command) (any, game.Delta, error) {
+	testState := state.(*gatewayTestState)
+	if command.Type != game.CommandDoMove {
+		return state, game.Delta{}, game.ErrInvalidCommand
+	}
+	move, ok := command.Payload.(xiangqi.Move)
+	if !ok {
+		return state, game.Delta{}, game.ErrInvalidCommand
+	}
+	testState.moves++
+	base := game.Delta{
+		Type:        game.TypeXiangqi,
+		CommandType: game.CommandDoMove,
+		Status:      game.StatusActive,
+		StateHash:   testState.moves,
+	}
+	base.CommandPayload = move
+	base.Payload = xiangqi.Delta{
+		Delta:      base,
+		MoveUCI:    move.UCI,
+		SideToMove: xiangqi.SideRed,
+	}
+	return testState, base, nil
 }

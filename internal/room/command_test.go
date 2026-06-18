@@ -4,83 +4,78 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/Ruleshift/server/internal/game"
+	"github.com/Ruleshift/server/internal/game/xiangqi"
 )
 
-func TestApplyIntCommandAdd(t *testing.T) {
+func TestApplyGameCommandMove(t *testing.T) {
 	now := time.Unix(100, 0).UTC()
-	state := NewState("room-1", now)
+	module := testGameModule{}
+	gameState, err := module.NewState(now)
+	if err != nil {
+		t.Fatalf("NewState returned error: %v", err)
+	}
+	state := NewState("room-1", module.Type(), gameState, now)
 
-	next, delta, err := ApplyIntCommand(state, IntCommand{
-		RoomID:    "room-1",
-		PlayerID:  "player-1",
-		Operation: OperationAdd,
-		Value:     7,
+	next, delta, err := ApplyGameCommand(module, state, GameCommand{
+		RoomID:   "room-1",
+		PlayerID: "player-1",
+		Type:     game.CommandDoMove,
+		Payload:  xiangqi.Move{FromSquare: 1, ToSquare: 2, UCI: "a0a1"},
 	}, now.Add(time.Second))
 	if err != nil {
-		t.Fatalf("ApplyIntCommand returned error: %v", err)
+		t.Fatalf("ApplyGameCommand returned error: %v", err)
 	}
 
-	if next.Value != 7 {
-		t.Fatalf("Value = %d, want 7", next.Value)
-	}
 	if next.Revision != 1 {
 		t.Fatalf("Revision = %d, want 1", next.Revision)
 	}
-	if delta.PreviousValue != 0 || delta.NewValue != 7 {
-		t.Fatalf("delta values = %d -> %d, want 0 -> 7", delta.PreviousValue, delta.NewValue)
+	if delta.PreviousRevision != 0 || delta.NewRevision != 1 {
+		t.Fatalf("delta revisions = %d -> %d, want 0 -> 1", delta.PreviousRevision, delta.NewRevision)
+	}
+	if delta.Game.StateHash != 1 {
+		t.Fatalf("delta state hash = %d, want 1", delta.Game.StateHash)
 	}
 }
 
-func TestApplyIntCommandSet(t *testing.T) {
-	now := time.Unix(100, 0).UTC()
-	state := NewState("room-1", now)
-	state.Value = 5
-	state.Revision = 3
+func TestApplyGameCommandRejectsInvalidCommand(t *testing.T) {
+	state := newTestRoomState(t)
 
-	next, _, err := ApplyIntCommand(state, IntCommand{
-		RoomID:           "room-1",
-		PlayerID:         "player-1",
-		Operation:        OperationSet,
-		Value:            42,
-		ExpectedRevision: 3,
-	}, now.Add(time.Second))
-	if err != nil {
-		t.Fatalf("ApplyIntCommand returned error: %v", err)
-	}
-
-	if next.Value != 42 {
-		t.Fatalf("Value = %d, want 42", next.Value)
-	}
-	if next.Revision != 4 {
-		t.Fatalf("Revision = %d, want 4", next.Revision)
-	}
-}
-
-func TestApplyIntCommandRejectsInvalidOperation(t *testing.T) {
-	state := NewState("room-1", time.Unix(100, 0).UTC())
-
-	_, _, err := ApplyIntCommand(state, IntCommand{
-		RoomID:    "room-1",
-		PlayerID:  "player-1",
-		Operation: OperationUnspecified,
+	_, _, err := ApplyGameCommand(testGameModule{}, state, GameCommand{
+		RoomID:   "room-1",
+		PlayerID: "player-1",
+		Type:     game.CommandUnspecified,
 	}, time.Unix(101, 0).UTC())
-	if !errors.Is(err, ErrInvalidOperation) {
-		t.Fatalf("error = %v, want ErrInvalidOperation", err)
+	if !errors.Is(err, game.ErrInvalidCommand) {
+		t.Fatalf("error = %v, want game.ErrInvalidCommand", err)
 	}
 }
 
-func TestApplyIntCommandRejectsRevisionMismatch(t *testing.T) {
-	state := NewState("room-1", time.Unix(100, 0).UTC())
+func TestApplyGameCommandRejectsRevisionMismatch(t *testing.T) {
+	state := newTestRoomState(t)
 	state.Revision = 9
 
-	_, _, err := ApplyIntCommand(state, IntCommand{
+	_, _, err := ApplyGameCommand(testGameModule{}, state, GameCommand{
 		RoomID:           "room-1",
 		PlayerID:         "player-1",
-		Operation:        OperationAdd,
-		Value:            1,
+		Type:             game.CommandDoMove,
+		Payload:          xiangqi.Move{UCI: "a0a1"},
 		ExpectedRevision: 8,
 	}, time.Unix(101, 0).UTC())
 	if !errors.Is(err, ErrRevisionMismatch) {
 		t.Fatalf("error = %v, want ErrRevisionMismatch", err)
 	}
+}
+
+func newTestRoomState(t *testing.T) RoomState {
+	t.Helper()
+
+	now := time.Unix(100, 0).UTC()
+	module := testGameModule{}
+	gameState, err := module.NewState(now)
+	if err != nil {
+		t.Fatalf("NewState returned error: %v", err)
+	}
+	return NewState("room-1", module.Type(), gameState, now)
 }

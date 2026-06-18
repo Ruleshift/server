@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Ruleshift/server/internal/game/xiangqi"
 	"github.com/Ruleshift/server/internal/room"
 )
 
@@ -38,7 +39,7 @@ func TestReadyHandler(t *testing.T) {
 }
 
 func TestMetricsHandler(t *testing.T) {
-	registry := room.NewRegistry(room.RuntimeConfig{InputQueueSize: 4})
+	registry := room.NewRegistry(room.RuntimeConfig{InputQueueSize: 4, GameModule: xiangqi.NewModule()})
 	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	response := httptest.NewRecorder()
 

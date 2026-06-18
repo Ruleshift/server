@@ -1,13 +1,13 @@
 # Ruleshift Architecture
 
-Ruleshift is an authoritative multiplayer state server. The future domain is a Steam-compatible Unity C# card game, but the MVP state is intentionally one shared `int64` per room.
+Ruleshift is an authoritative multiplayer state server. The future domain is a Steam-compatible Unity C# card game, but the current MVP room state is a pluggable game module. The first module is Xiangqi.
 
 ## Phase Plan
 
 - Phase 0: repository discovery and project plan.
 - Phase 1: project skeleton with Go module, entrypoints, config, logging, and package boundaries.
 - Phase 2: protobuf schema, generation targets, and direct protobuf WebSocket payloads.
-- Phase 3: authoritative integer room model with sequential runtime tests.
+- Phase 3: authoritative game room model with sequential runtime tests.
 - Phase 4: actor-like runtime hardening with bounded session queues and slow-consumer handling.
 - Phase 5: WebSocket gateway.
 - Phase 6: Steam-compatible authentication.
@@ -35,7 +35,7 @@ Phase 5 gateway behavior:
 - binary payloads are protobuf envelopes serialized directly with the generated protobuf runtime;
 - `AuthRequest` must be the first client envelope;
 - `JoinRoomRequest` creates or joins a room and returns `JoinRoomOk`, followed by `StateSnapshot` only when the client's `last_seen_revision` differs from the current room revision;
-- `IntCommand` is submitted to the authoritative room runtime;
+- `GameCommand` is submitted to the authoritative room runtime;
 - successful commands are broadcast as `StateDelta` to all joined sessions;
 - app-level `Ping` returns `Pong`;
 - basic `client_sequence` monotonic checks reject repeated or out-of-order client messages.
@@ -79,12 +79,15 @@ This layer is not wired to public API handlers yet; it is ready to sit behind HT
 
 One `RoomRuntime` owns one `RoomState`. Commands enter through a bounded input queue and are applied sequentially. External packages request snapshots or submit commands through the runtime, rather than mutating room state directly.
 
-Phase 3 behavior:
+Current behavior:
 
-- `Add` increases the shared integer value.
-- `Set` replaces the shared integer value.
-- each accepted command increments revision exactly once;
-- invalid operations are rejected without changing state;
+- `internal/room` owns queueing, revisions, snapshots, subscribers, and replay.
+- `internal/game` defines the game module contract and abstract command/snapshot/delta envelopes.
+- Concrete modules own their payload structs; `internal/game/xiangqi` embeds the abstract envelopes for Xiangqi moves, snapshots, deltas, sides, and board updates.
+- `internal/game/xiangqi` adapts `github.com/laines-it/xiangqi-go/engine` via its declared module path and applies legal `DoMove` commands through `GenerateLEGAL` and `DoMove`.
+- first and second joined players are seated as red and black; further joined clients can observe.
+- accepted `DoMove`, `Resign`, and `OfferDraw` commands increment revision exactly once;
+- invalid game commands are rejected without changing state;
 - `expected_revision == 0` means blind update;
 - non-zero `expected_revision` must match current room revision.
 
@@ -117,12 +120,13 @@ Event types are:
 
 - `RoomCreated`
 - `PlayerJoined`
-- `IntAdded`
-- `IntSet`
+- `GameMoveApplied`
+- `PlayerResigned`
+- `DrawOffered`
 - `SnapshotSent`
 - `PlayerDisconnected`
 
-Replay starts from `RoomCreated`, applies only mutating integer events (`IntAdded` and `IntSet`), and treats join, snapshot, and disconnect events as audit trail entries. This restores the authoritative `RoomState` value and revision without trusting client state. The current implementation is intentionally in-memory for interview clarity; a file-backed or durable store can be added behind the same `EventStore` interface later.
+Replay starts from `RoomCreated`, applies `PlayerJoined` to restore module seating, then reapplies mutating game events through the same module contract. Snapshot and disconnect events remain audit trail entries. This restores the authoritative `RoomState` and revision without trusting client state. The current implementation is intentionally in-memory for interview clarity; a file-backed or durable store can be added behind the same `EventStore` interface later.
 
 ## Non-Goals For MVP
 

@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,7 +41,8 @@ type consoleClient struct {
 	clientSequence uint64
 	playerID       string
 	roomID         string
-	currentValue   int64
+	currentFEN     string
+	stateHash      uint64
 	lastRevision   uint64
 	strictRevision bool
 }
@@ -65,14 +65,14 @@ func parseFlags() options {
 	flag.StringVar(&opts.ticket, "ticket", "mock:player-1", "mock auth ticket")
 	flag.StringVar(&opts.roomID, "room", "demo", "room id to join")
 	flag.Uint64Var(&opts.lastSeenRevision, "last-seen-revision", 0, "revision sent in JoinRoomRequest")
-	flag.BoolVar(&opts.strictRevision, "strict-revision", false, "send the current room revision as IntCommand.expected_revision")
+	flag.BoolVar(&opts.strictRevision, "strict-revision", false, "send the current room revision as GameCommand.expected_revision")
 	flag.DurationVar(&opts.timeout, "timeout", 5*time.Second, "timeout for auth/join/commands")
 	flag.IntVar(&opts.maxMessageBytes, "max-message-bytes", defaultMaxMessageBytes, "max protobuf payload size")
 	flag.DurationVar(&opts.handshakeTimeout, "handshake-timeout", 10*time.Second, "websocket handshake timeout")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "Ruleshift interactive console\n\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "Example:\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  go run ./cmd/console -addr ws://147.45.211.122:8080/ws -ticket mock:player-1 -room demo\n\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  go run ./cmd/console -addr ws://localhost:8080/ws -ticket mock:player-1 -room demo\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -204,7 +204,7 @@ func scanInput(ctx context.Context, client *consoleClient, lines chan<- string) 
 func (c *consoleClient) prompt() string {
 	c.stateMu.RLock()
 	defer c.stateMu.RUnlock()
-	return fmt.Sprintf("ruleshift[%s r%d=%d]> ", c.roomID, c.lastRevision, c.currentValue)
+	return fmt.Sprintf("ruleshift[%s r%d hash=%d]> ", c.roomID, c.lastRevision, c.stateHash)
 }
 
 func (c *consoleClient) authenticate(ctx context.Context, ticket string) error {
@@ -337,21 +337,27 @@ func (c *consoleClient) handleCommand(ctx context.Context, timeout time.Duration
 			return false, fmt.Errorf("usage: get")
 		}
 		return false, runWithTimeout(ctx, timeout, c.sendSnapshotRequest)
-	case "add":
-		value, err := parseOneInt64(args, "add <value>")
+	case "move":
+		move, err := parseMove(args)
 		if err != nil {
 			return false, err
 		}
 		return false, runWithTimeout(ctx, timeout, func(stepCtx context.Context) error {
-			return c.sendIntCommand(stepCtx, ruleshiftv1.IntOperation_INT_OPERATION_ADD, value)
+			return c.sendGameCommand(stepCtx, moveCommand(move))
 		})
-	case "set":
-		value, err := parseOneInt64(args, "set <value>")
-		if err != nil {
-			return false, err
+	case "resign":
+		if len(args) != 0 {
+			return false, fmt.Errorf("usage: resign")
 		}
 		return false, runWithTimeout(ctx, timeout, func(stepCtx context.Context) error {
-			return c.sendIntCommand(stepCtx, ruleshiftv1.IntOperation_INT_OPERATION_SET, value)
+			return c.sendGameCommand(stepCtx, resignCommand())
+		})
+	case "draw", "offer-draw":
+		if len(args) != 0 {
+			return false, fmt.Errorf("usage: draw")
+		}
+		return false, runWithTimeout(ctx, timeout, func(stepCtx context.Context) error {
+			return c.sendGameCommand(stepCtx, offerDrawCommand())
 		})
 	case "room":
 		if len(args) != 1 || args[0] == "" {
@@ -361,7 +367,8 @@ func (c *consoleClient) handleCommand(ctx context.Context, timeout time.Duration
 		return false, runWithTimeout(ctx, timeout, func(stepCtx context.Context) error {
 			c.stateMu.Lock()
 			c.roomID = roomID
-			c.currentValue = 0
+			c.currentFEN = ""
+			c.stateHash = 0
 			c.lastRevision = 0
 			c.stateMu.Unlock()
 			if err := c.sendJoinRoom(stepCtx, roomID, 0); err != nil {
@@ -398,15 +405,15 @@ func parseConsoleLine(line string) (string, []string) {
 	return strings.ToLower(fields[0]), fields[1:]
 }
 
-func parseOneInt64(args []string, usage string) (int64, error) {
+func parseMove(args []string) (string, error) {
 	if len(args) != 1 {
-		return 0, fmt.Errorf("usage: %s", usage)
+		return "", fmt.Errorf("usage: move <uci-move>")
 	}
-	value, err := strconv.ParseInt(args[0], 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("parse value %q: %w", args[0], err)
+	move := strings.TrimSpace(strings.ToLower(args[0]))
+	if len(move) != 4 {
+		return "", fmt.Errorf("move must be four coordinates, for example h2e2")
 	}
-	return value, nil
+	return move, nil
 }
 
 func (c *consoleClient) sendJoinRoom(ctx context.Context, roomID string, lastSeenRevision uint64) error {
@@ -432,7 +439,7 @@ func (c *consoleClient) sendSnapshotRequest(ctx context.Context) error {
 	})
 }
 
-func (c *consoleClient) sendIntCommand(ctx context.Context, op ruleshiftv1.IntOperation, value int64) error {
+func (c *consoleClient) sendGameCommand(ctx context.Context, command *ruleshiftv1.GameCommand) error {
 	c.stateMu.RLock()
 	roomID := c.roomID
 	expectedRevision := uint64(0)
@@ -441,13 +448,10 @@ func (c *consoleClient) sendIntCommand(ctx context.Context, op ruleshiftv1.IntOp
 	}
 	c.stateMu.RUnlock()
 
+	command.RoomId = roomID
+	command.ExpectedRevision = expectedRevision
 	return c.send(ctx, &ruleshiftv1.ClientEnvelope{
-		Payload: &ruleshiftv1.ClientEnvelope_IntCommand{IntCommand: &ruleshiftv1.IntCommand{
-			RoomId:           roomID,
-			Operation:        op,
-			Value:            value,
-			ExpectedRevision: expectedRevision,
-		}},
+		Payload: &ruleshiftv1.ClientEnvelope_GameCommand{GameCommand: command},
 	})
 }
 
@@ -559,8 +563,11 @@ func (c *consoleClient) applySnapshot(snapshot *ruleshiftv1.StateSnapshot) {
 	c.stateMu.Lock()
 	defer c.stateMu.Unlock()
 	c.roomID = snapshot.GetRoomId()
-	c.currentValue = snapshot.GetValue()
 	c.lastRevision = snapshot.GetRevision()
+	if xiangqi := snapshot.GetXiangqi(); xiangqi != nil {
+		c.currentFEN = xiangqi.GetFen()
+		c.stateHash = xiangqi.GetStateHash()
+	}
 }
 
 func (c *consoleClient) applyDelta(delta *ruleshiftv1.StateDelta) {
@@ -568,8 +575,10 @@ func (c *consoleClient) applyDelta(delta *ruleshiftv1.StateDelta) {
 	defer c.stateMu.Unlock()
 	if delta.GetNewRevision() >= c.lastRevision {
 		c.roomID = delta.GetRoomId()
-		c.currentValue = delta.GetNewValue()
 		c.lastRevision = delta.GetNewRevision()
+		if xiangqi := delta.GetXiangqi(); xiangqi != nil {
+			c.stateHash = xiangqi.GetStateHash()
+		}
 	}
 }
 
@@ -583,13 +592,28 @@ func (c *consoleClient) printStatus() {
 	c.stateMu.RLock()
 	defer c.stateMu.RUnlock()
 	fmt.Printf(
-		"status player=%s room=%s value=%d revision=%d strict_revision=%t\n",
+		"status player=%s room=%s hash=%d revision=%d strict_revision=%t fen=%q\n",
 		c.playerID,
 		c.roomID,
-		c.currentValue,
+		c.stateHash,
 		c.lastRevision,
 		c.strictRevision,
+		c.currentFEN,
 	)
+}
+
+func moveCommand(move string) *ruleshiftv1.GameCommand {
+	return &ruleshiftv1.GameCommand{
+		Command: &ruleshiftv1.GameCommand_DoMove{DoMove: &ruleshiftv1.DoMove{MoveUci: strings.TrimSpace(move)}},
+	}
+}
+
+func resignCommand() *ruleshiftv1.GameCommand {
+	return &ruleshiftv1.GameCommand{Command: &ruleshiftv1.GameCommand_Resign{Resign: &ruleshiftv1.Resign{}}}
+}
+
+func offerDrawCommand() *ruleshiftv1.GameCommand {
+	return &ruleshiftv1.GameCommand{Command: &ruleshiftv1.GameCommand_OfferDraw{OfferDraw: &ruleshiftv1.OfferDraw{}}}
 }
 
 func serverError(message *ruleshiftv1.ErrorMessage) error {
@@ -597,32 +621,62 @@ func serverError(message *ruleshiftv1.ErrorMessage) error {
 }
 
 func printSnapshot(snapshot *ruleshiftv1.StateSnapshot) {
-	fmt.Printf("snapshot room=%s value=%d revision=%d\n", snapshot.GetRoomId(), snapshot.GetValue(), snapshot.GetRevision())
-}
-
-func printDelta(delta *ruleshiftv1.StateDelta) {
+	xiangqi := snapshot.GetXiangqi()
+	if xiangqi == nil {
+		fmt.Printf("snapshot room=%s revision=%d game=%s\n", snapshot.GetRoomId(), snapshot.GetRevision(), snapshot.GetGameType())
+		return
+	}
 	fmt.Printf(
-		"delta room=%s previous=%d new=%d revision=%d->%d changed_by=%s operation=%s operand=%d\n",
-		delta.GetRoomId(),
-		delta.GetPreviousValue(),
-		delta.GetNewValue(),
-		delta.GetPreviousRevision(),
-		delta.GetNewRevision(),
-		delta.GetChangedByPlayerId(),
-		shortOperation(delta.GetOperation()),
-		delta.GetOperand(),
+		"snapshot room=%s revision=%d hash=%d side=%s status=%s red=%s black=%s fen=%q\n",
+		snapshot.GetRoomId(),
+		snapshot.GetRevision(),
+		xiangqi.GetStateHash(),
+		shortSide(xiangqi.GetSideToMove()),
+		shortStatus(xiangqi.GetStatus()),
+		xiangqi.GetRedPlayerId(),
+		xiangqi.GetBlackPlayerId(),
+		xiangqi.GetFen(),
 	)
 }
 
-func shortOperation(op ruleshiftv1.IntOperation) string {
-	return strings.TrimPrefix(op.String(), "INT_OPERATION_")
+func printDelta(delta *ruleshiftv1.StateDelta) {
+	xiangqi := delta.GetXiangqi()
+	if xiangqi == nil {
+		fmt.Printf("delta room=%s revision=%d->%d changed_by=%s game=%s\n", delta.GetRoomId(), delta.GetPreviousRevision(), delta.GetNewRevision(), delta.GetChangedByPlayerId(), delta.GetGameType())
+		return
+	}
+	fmt.Printf(
+		"delta room=%s revision=%d->%d changed_by=%s command=%s move=%s hash=%d side=%s status=%s\n",
+		delta.GetRoomId(),
+		delta.GetPreviousRevision(),
+		delta.GetNewRevision(),
+		delta.GetChangedByPlayerId(),
+		shortCommand(xiangqi.GetCommandType()),
+		xiangqi.GetMoveUci(),
+		xiangqi.GetStateHash(),
+		shortSide(xiangqi.GetSideToMove()),
+		shortStatus(xiangqi.GetStatus()),
+	)
+}
+
+func shortCommand(command ruleshiftv1.GameCommandType) string {
+	return strings.TrimPrefix(command.String(), "GAME_COMMAND_TYPE_")
+}
+
+func shortSide(side ruleshiftv1.XiangqiSide) string {
+	return strings.TrimPrefix(side.String(), "XIANGQI_SIDE_")
+}
+
+func shortStatus(status ruleshiftv1.GameStatus) string {
+	return strings.TrimPrefix(status.String(), "GAME_STATUS_")
 }
 
 func printHelp() {
 	fmt.Println("commands:")
 	fmt.Println("  get              request current room snapshot")
-	fmt.Println("  add <value>      add value to the shared integer")
-	fmt.Println("  set <value>      set the shared integer")
+	fmt.Println("  move <uci>       submit a Xiangqi move, for example h2e2")
+	fmt.Println("  resign           resign the game")
+	fmt.Println("  draw             offer a draw")
 	fmt.Println("  room <room-id>   join or create another room")
 	fmt.Println("  strict on|off    toggle expected revision checks")
 	fmt.Println("  ping             send app-level ping")

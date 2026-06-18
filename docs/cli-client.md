@@ -37,16 +37,17 @@ Read current state:
 go run ./cmd/client -addr ws://192.168.1.50:8080/ws -ticket mock:player-1 -room demo -op get
 ```
 
-Add to the shared integer:
+Submit a Xiangqi move:
 
 ```powershell
-go run ./cmd/client -addr ws://192.168.1.50:8080/ws -ticket mock:player-1 -room demo -op add -value 5
+go run ./cmd/client -addr ws://192.168.1.50:8080/ws -ticket mock:player-1 -room demo -op move -move h2e2
 ```
 
-Set the shared integer:
+Resign or offer a draw:
 
 ```powershell
-go run ./cmd/client -addr ws://192.168.1.50:8080/ws -ticket mock:player-2 -room demo -op set -value 42
+go run ./cmd/client -addr ws://192.168.1.50:8080/ws -ticket mock:player-1 -room demo -op resign
+go run ./cmd/client -addr ws://192.168.1.50:8080/ws -ticket mock:player-1 -room demo -op draw
 ```
 
 Watch snapshots and deltas:
@@ -68,8 +69,8 @@ go run ./cmd/client -addr ws://192.168.1.50:8080/ws -ticket mock:player-1 -room 
 Send commands from client B:
 
 ```powershell
-go run ./cmd/client -addr ws://192.168.1.50:8080/ws -ticket mock:player-2 -room demo -op add -value 10
-go run ./cmd/client -addr ws://192.168.1.50:8080/ws -ticket mock:player-2 -room demo -op set -value 100
+go run ./cmd/client -addr ws://192.168.1.50:8080/ws -ticket mock:player-1 -room demo -op move -move h2e2
+go run ./cmd/client -addr ws://192.168.1.50:8080/ws -ticket mock:player-2 -room demo -op move -move h7e7
 ```
 
 Client A should print the same ordered `revision` stream produced by the server.
@@ -82,6 +83,12 @@ Build it once:
 
 ```powershell
 go build -o ruleshift-console.exe ./cmd/console
+```
+
+Or package it as a shareable Windows zip:
+
+```powershell
+.\scripts\package-console.ps1
 ```
 
 Open client A:
@@ -100,8 +107,9 @@ Inside either console, use short commands:
 
 ```text
 get
-add 10
-set 42
+move h2e2
+resign
+draw
 room demo-2
 status
 quit
@@ -111,10 +119,10 @@ Both clients stay connected and print snapshots or deltas from the room as the s
 
 ## Revision Checks
 
-By default, Add/Set uses `expected_revision=0`, which means a blind authoritative update accepted by the server.
+By default, game commands use `expected_revision=0`, which means a blind authoritative update accepted by the server.
 
 Use strict revision checking when you want the command to be rejected if the room changed after join:
 
 ```powershell
-go run ./cmd/client -addr ws://192.168.1.50:8080/ws -ticket mock:player-1 -room demo -op add -value 1 -strict-revision
+go run ./cmd/client -addr ws://192.168.1.50:8080/ws -ticket mock:player-1 -room demo -op move -move h2e2 -strict-revision
 ```

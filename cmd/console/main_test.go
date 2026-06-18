@@ -3,21 +3,21 @@ package main
 import "testing"
 
 func TestParseConsoleLine(t *testing.T) {
-	cmd, args := parseConsoleLine("  ADD   10  ")
-	if cmd != "add" {
-		t.Fatalf("unexpected command: got=%q want=add", cmd)
+	cmd, args := parseConsoleLine("  MOVE   h2e2  ")
+	if cmd != "move" {
+		t.Fatalf("unexpected command: got=%q want=move", cmd)
 	}
-	if len(args) != 1 || args[0] != "10" {
-		t.Fatalf("unexpected args: got=%v want=[10]", args)
+	if len(args) != 1 || args[0] != "h2e2" {
+		t.Fatalf("unexpected args: got=%v want=[h2e2]", args)
 	}
 }
 
-func TestParseOneInt64(t *testing.T) {
-	value, err := parseOneInt64([]string{"-42"}, "add <value>")
+func TestParseMove(t *testing.T) {
+	move, err := parseMove([]string{"H2E2"})
 	if err != nil {
 		t.Fatalf("parse failed: %v", err)
 	}
-	if value != -42 {
-		t.Fatalf("unexpected value: got=%d want=-42", value)
+	if move != "h2e2" {
+		t.Fatalf("unexpected move: got=%q want=h2e2", move)
 	}
 }

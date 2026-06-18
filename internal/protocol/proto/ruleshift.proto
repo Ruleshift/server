@@ -11,7 +11,7 @@ message ClientEnvelope {
   oneof payload {
     AuthRequest auth_request = 10;
     JoinRoomRequest join_room = 11;
-    IntCommand int_command = 12;
+    GameCommand game_command = 12;
     SnapshotRequest snapshot_request = 13;
     Ping ping = 14;
   }
@@ -54,34 +54,100 @@ message JoinRoomOk {
   uint64 current_revision = 2;
 }
 
-enum IntOperation {
-  INT_OPERATION_UNSPECIFIED = 0;
-  INT_OPERATION_ADD = 1;
-  INT_OPERATION_SET = 2;
+enum GameType {
+  GAME_TYPE_UNSPECIFIED = 0;
+  GAME_TYPE_XIANGQI = 1;
 }
 
-message IntCommand {
+enum GameCommandType {
+  GAME_COMMAND_TYPE_UNSPECIFIED = 0;
+  GAME_COMMAND_TYPE_DO_MOVE = 1;
+  GAME_COMMAND_TYPE_RESIGN = 2;
+  GAME_COMMAND_TYPE_OFFER_DRAW = 3;
+}
+
+enum XiangqiSide {
+  XIANGQI_SIDE_UNSPECIFIED = 0;
+  XIANGQI_SIDE_RED = 1;
+  XIANGQI_SIDE_BLACK = 2;
+}
+
+enum GameStatus {
+  GAME_STATUS_UNSPECIFIED = 0;
+  GAME_STATUS_ACTIVE = 1;
+  GAME_STATUS_RESIGNED = 2;
+  GAME_STATUS_DRAW_OFFERED = 3;
+  GAME_STATUS_DRAWN = 4;
+}
+
+message GameCommand {
   string room_id = 1;
-  IntOperation operation = 2;
-  int64 value = 3;
-  uint64 expected_revision = 4;
+  uint64 expected_revision = 2;
+  oneof command {
+    DoMove do_move = 10;
+    Resign resign = 11;
+    OfferDraw offer_draw = 12;
+  }
+}
+
+message DoMove {
+  uint32 from_square = 1;
+  uint32 to_square = 2;
+  string move_uci = 3;
+}
+
+message Resign {}
+
+message OfferDraw {}
+
+message SquareUpdate {
+  uint32 square = 1;
+  uint32 piece = 2;
 }
 
 message StateSnapshot {
   string room_id = 1;
-  int64 value = 2;
-  uint64 revision = 3;
+  uint64 revision = 2;
+  GameType game_type = 3;
+  oneof state {
+    XiangqiSnapshot xiangqi = 10;
+  }
+}
+
+message XiangqiSnapshot {
+  string fen = 1;
+  repeated uint32 board = 2 [packed = true];
+  XiangqiSide side_to_move = 3;
+  GameStatus status = 4;
+  string red_player_id = 5;
+  string black_player_id = 6;
+  string winner_player_id = 7;
+  string draw_offered_by_player_id = 8;
+  uint64 state_hash = 9;
 }
 
 message StateDelta {
   string room_id = 1;
-  int64 previous_value = 2;
-  int64 new_value = 3;
-  uint64 previous_revision = 4;
-  uint64 new_revision = 5;
-  string changed_by_player_id = 6;
-  IntOperation operation = 7;
-  int64 operand = 8;
+  uint64 previous_revision = 2;
+  uint64 new_revision = 3;
+  string changed_by_player_id = 4;
+  GameType game_type = 5;
+  oneof delta {
+    XiangqiDelta xiangqi = 10;
+  }
+}
+
+message XiangqiDelta {
+  GameCommandType command_type = 1;
+  string move_uci = 2;
+  uint32 from_square = 3;
+  uint32 to_square = 4;
+  repeated SquareUpdate square_updates = 5;
+  XiangqiSide side_to_move = 6;
+  GameStatus status = 7;
+  string winner_player_id = 8;
+  string draw_offered_by_player_id = 9;
+  uint64 state_hash = 10;
 }
 
 message SnapshotRequest {

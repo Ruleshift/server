@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/Ruleshift/server/internal/game"
+	"github.com/Ruleshift/server/internal/game/xiangqi"
 	ruleshiftv1 "github.com/Ruleshift/server/internal/protocol/generated/go/ruleshiftv1"
 	"github.com/Ruleshift/server/internal/room"
 )
@@ -42,8 +44,8 @@ func TestWebSocketSessionCompactsQueueToSnapshot(t *testing.T) {
 	if snapshot == nil {
 		t.Fatalf("payload = nil, want StateSnapshot")
 	}
-	if snapshot.GetValue() != 7 || snapshot.GetRevision() != 3 {
-		t.Fatalf("snapshot = value %d revision %d, want 7/3", snapshot.GetValue(), snapshot.GetRevision())
+	if snapshot.GetXiangqi().GetStateHash() != 7 || snapshot.GetRevision() != 3 {
+		t.Fatalf("snapshot = hash %d revision %d, want 7/3", snapshot.GetXiangqi().GetStateHash(), snapshot.GetRevision())
 	}
 }
 
@@ -77,23 +79,42 @@ func newTestWebSocketSession(t *testing.T, queueSize int) *websocketSession {
 }
 
 func testDeltaEnvelope(revision uint64) *ruleshiftv1.ServerEnvelope {
+	base := game.Delta{
+		Type:        game.TypeXiangqi,
+		CommandType: game.CommandDoMove,
+		StateHash:   revision,
+		Status:      game.StatusActive,
+	}
+	base.CommandPayload = xiangqi.Move{UCI: "a0a1"}
+	base.Payload = xiangqi.Delta{
+		Delta:   base,
+		MoveUCI: "a0a1",
+	}
+
 	return room.DeltaEnvelope(room.StateDelta{
 		RoomID:            "room-1",
-		PreviousValue:     int64(revision - 1),
-		NewValue:          int64(revision),
 		PreviousRevision:  revision - 1,
 		NewRevision:       revision,
 		ChangedByPlayerID: "player-1",
-		Operation:         room.OperationAdd,
-		Operand:           1,
+		Game:              base,
 	})
 }
 
 func testSnapshotEnvelope() *ruleshiftv1.ServerEnvelope {
+	base := game.Snapshot{
+		Type:      game.TypeXiangqi,
+		StateHash: 7,
+		Status:    game.StatusActive,
+	}
+	base.Payload = xiangqi.Snapshot{
+		Snapshot: base,
+		FEN:      "test:7",
+	}
+
 	return room.SnapshotEnvelope(room.StateSnapshot{
 		RoomID:   "room-1",
-		Value:    7,
 		Revision: 3,
+		Game:     base,
 	})
 }
 

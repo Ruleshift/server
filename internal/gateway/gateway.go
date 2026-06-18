@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/Ruleshift/server/internal/auth"
+	"github.com/Ruleshift/server/internal/game"
+	"github.com/Ruleshift/server/internal/game/xiangqi"
 	"github.com/Ruleshift/server/internal/protocol"
 	ruleshiftv1 "github.com/Ruleshift/server/internal/protocol/generated/go/ruleshiftv1"
 	"github.com/Ruleshift/server/internal/room"
@@ -189,8 +191,8 @@ func (g *Gateway) handleEnvelope(ctx context.Context, state *connectionState, en
 		return g.send(ctx, state.session, errorEnvelope("already_authenticated", "connection is already authenticated"))
 	case *ruleshiftv1.ClientEnvelope_JoinRoom:
 		return g.handleJoinRoom(ctx, state, payload.JoinRoom)
-	case *ruleshiftv1.ClientEnvelope_IntCommand:
-		return g.handleIntCommand(ctx, state, payload.IntCommand)
+	case *ruleshiftv1.ClientEnvelope_GameCommand:
+		return g.handleGameCommand(ctx, state, payload.GameCommand)
 	case *ruleshiftv1.ClientEnvelope_SnapshotRequest:
 		return g.handleSnapshotRequest(ctx, state, payload.SnapshotRequest)
 	case *ruleshiftv1.ClientEnvelope_Ping:
@@ -253,7 +255,7 @@ func (g *Gateway) handleJoinRoom(ctx context.Context, state *connectionState, pa
 	return nil
 }
 
-func (g *Gateway) handleIntCommand(ctx context.Context, state *connectionState, payload *ruleshiftv1.IntCommand) error {
+func (g *Gateway) handleGameCommand(ctx context.Context, state *connectionState, payload *ruleshiftv1.GameCommand) error {
 	if state.room == nil {
 		return g.send(ctx, state.session, errorEnvelope("not_in_room", "join a room before sending commands"))
 	}
@@ -261,14 +263,12 @@ func (g *Gateway) handleIntCommand(ctx context.Context, state *connectionState, 
 		return g.send(ctx, state.session, errorEnvelope("wrong_room", "command room_id does not match joined room"))
 	}
 
-	_, err := state.room.SubmitFrom(ctx, state.session, room.IntCommand{
-		RoomID:           payload.GetRoomId(),
-		PlayerID:         state.identity.PlayerID,
-		Operation:        toRoomOperation(payload.GetOperation()),
-		Value:            payload.GetValue(),
-		ExpectedRevision: payload.GetExpectedRevision(),
-		ReceivedAt:       time.Now().UTC(),
-	})
+	command, err := toRoomGameCommand(payload, state.identity.PlayerID)
+	if err != nil {
+		return g.send(ctx, state.session, errorEnvelope("bad_command", err.Error()))
+	}
+
+	_, err = state.room.SubmitFrom(ctx, state.session, command)
 	if err != nil {
 		if errors.Is(err, room.ErrStalePlayerSession) {
 			return nil
@@ -355,15 +355,37 @@ func (s *connectionState) acceptClientSequence(sequence uint64) error {
 	return nil
 }
 
-func toRoomOperation(operation ruleshiftv1.IntOperation) room.Operation {
-	switch operation {
-	case ruleshiftv1.IntOperation_INT_OPERATION_ADD:
-		return room.OperationAdd
-	case ruleshiftv1.IntOperation_INT_OPERATION_SET:
-		return room.OperationSet
-	default:
-		return room.OperationUnspecified
+func toRoomGameCommand(payload *ruleshiftv1.GameCommand, playerID string) (room.GameCommand, error) {
+	if payload == nil {
+		return room.GameCommand{}, fmt.Errorf("game command must not be nil")
 	}
+
+	command := room.GameCommand{
+		RoomID:           payload.GetRoomId(),
+		PlayerID:         playerID,
+		ExpectedRevision: payload.GetExpectedRevision(),
+		ReceivedAt:       time.Now().UTC(),
+	}
+
+	switch typed := payload.GetCommand().(type) {
+	case *ruleshiftv1.GameCommand_DoMove:
+		if typed.DoMove == nil {
+			return room.GameCommand{}, fmt.Errorf("do_move must not be nil")
+		}
+		command.Type = game.CommandDoMove
+		command.Payload = xiangqi.Move{
+			FromSquare: typed.DoMove.GetFromSquare(),
+			ToSquare:   typed.DoMove.GetToSquare(),
+			UCI:        typed.DoMove.GetMoveUci(),
+		}
+	case *ruleshiftv1.GameCommand_Resign:
+		command.Type = game.CommandResign
+	case *ruleshiftv1.GameCommand_OfferDraw:
+		command.Type = game.CommandOfferDraw
+	default:
+		return room.GameCommand{}, fmt.Errorf("unsupported game command %T", payload.GetCommand())
+	}
+	return command, nil
 }
 
 func authOkEnvelope(playerID string, displayName string) *ruleshiftv1.ServerEnvelope {

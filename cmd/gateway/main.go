@@ -12,6 +12,7 @@ import (
 
 	"github.com/Ruleshift/server/internal/auth"
 	"github.com/Ruleshift/server/internal/config"
+	"github.com/Ruleshift/server/internal/game/xiangqi"
 	"github.com/Ruleshift/server/internal/gateway"
 	"github.com/Ruleshift/server/internal/room"
 )
@@ -28,7 +29,10 @@ func main() {
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	authProvider := auth.NewMockProvider()
-	registry := room.NewRegistry(room.RuntimeConfig{InputQueueSize: cfg.RoomInputQueueSize})
+	registry := room.NewRegistry(room.RuntimeConfig{
+		InputQueueSize: cfg.RoomInputQueueSize,
+		GameModule:     xiangqi.NewModule(),
+	})
 	gatewayHandler, err := gateway.New(gateway.Config{
 		MaxMessageBytes:      cfg.MaxMessageBytes,
 		SessionSendQueueSize: cfg.SessionSendQueueSize,

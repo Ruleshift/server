@@ -23,7 +23,7 @@ type options struct {
 	ticket           string
 	roomID           string
 	op               string
-	value            int64
+	move             string
 	lastSeenRevision uint64
 	strictRevision   bool
 	timeout          time.Duration
@@ -38,7 +38,8 @@ type cliClient struct {
 	clientSequence  uint64
 	playerID        string
 	lastRevision    uint64
-	currentValue    int64
+	currentFEN      string
+	stateHash       uint64
 }
 
 func main() {
@@ -58,21 +59,20 @@ func parseFlags() options {
 	flag.StringVar(&opts.addr, "addr", "ws://localhost:8080/ws", "gateway WebSocket address")
 	flag.StringVar(&opts.ticket, "ticket", "mock:player-1", "mock auth ticket")
 	flag.StringVar(&opts.roomID, "room", "room-1", "room id to join")
-	flag.StringVar(&opts.op, "op", "get", "operation: get, add, set, watch")
-	flag.Int64Var(&opts.value, "value", 1, "value for add/set operations")
+	flag.StringVar(&opts.op, "op", "get", "operation: get, move, resign, draw, watch")
+	flag.StringVar(&opts.move, "move", "h2e2", "UCI-style Xiangqi move for -op move, for example h2e2")
 	flag.Uint64Var(&opts.lastSeenRevision, "last-seen-revision", 0, "revision sent in JoinRoomRequest")
-	flag.BoolVar(&opts.strictRevision, "strict-revision", false, "send the joined room revision as IntCommand.expected_revision instead of blind revision 0")
-	flag.DurationVar(&opts.timeout, "timeout", 5*time.Second, "timeout for auth/join/get/add/set")
+	flag.BoolVar(&opts.strictRevision, "strict-revision", false, "send the joined room revision as GameCommand.expected_revision")
+	flag.DurationVar(&opts.timeout, "timeout", 5*time.Second, "timeout for auth/join/commands")
 	flag.DurationVar(&opts.watchDuration, "watch-duration", 0, "watch duration; 0 means until Ctrl+C")
 	flag.IntVar(&opts.maxMessageBytes, "max-message-bytes", defaultMaxMessageBytes, "max protobuf payload size")
 	flag.DurationVar(&opts.handshakeTimeout, "handshake-timeout", 10*time.Second, "websocket handshake timeout")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "Ruleshift CLI client\n\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "Examples:\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  go run ./cmd/client -addr ws://192.168.1.50:8080/ws -ticket mock:player-1 -room demo -op get\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  go run ./cmd/client -addr ws://192.168.1.50:8080/ws -ticket mock:player-1 -room demo -op add -value 5\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  go run ./cmd/client -addr ws://192.168.1.50:8080/ws -ticket mock:player-2 -room demo -op set -value 42\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  go run ./cmd/client -addr ws://192.168.1.50:8080/ws -ticket mock:watcher -room demo -op watch\n\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  go run ./cmd/client -addr ws://localhost:8080/ws -ticket mock:player-1 -room demo -op get\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  go run ./cmd/client -addr ws://localhost:8080/ws -ticket mock:player-1 -room demo -op move -move h2e2\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  go run ./cmd/client -addr ws://localhost:8080/ws -ticket mock:player-2 -room demo -op watch\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -117,13 +117,17 @@ func run(ctx context.Context, opts options) error {
 		return runWithTimeout(ctx, opts.timeout, func(stepCtx context.Context) error {
 			return client.requestSnapshot(stepCtx, opts.roomID)
 		})
-	case "add":
+	case "move":
 		return runWithTimeout(ctx, opts.timeout, func(stepCtx context.Context) error {
-			return client.sendIntCommand(stepCtx, opts.roomID, ruleshiftv1.IntOperation_INT_OPERATION_ADD, opts.value, opts.strictRevision)
+			return client.sendGameCommand(stepCtx, opts.roomID, moveCommand(opts.move), opts.strictRevision)
 		})
-	case "set":
+	case "resign":
 		return runWithTimeout(ctx, opts.timeout, func(stepCtx context.Context) error {
-			return client.sendIntCommand(stepCtx, opts.roomID, ruleshiftv1.IntOperation_INT_OPERATION_SET, opts.value, opts.strictRevision)
+			return client.sendGameCommand(stepCtx, opts.roomID, resignCommand(), opts.strictRevision)
+		})
+	case "draw", "offer-draw":
+		return runWithTimeout(ctx, opts.timeout, func(stepCtx context.Context) error {
+			return client.sendGameCommand(stepCtx, opts.roomID, offerDrawCommand(), opts.strictRevision)
 		})
 	case "watch":
 		watchCtx := ctx
@@ -139,7 +143,7 @@ func run(ctx context.Context, opts options) error {
 		}
 		return client.watch(watchCtx)
 	default:
-		return fmt.Errorf("unsupported -op %q; expected get, add, set, or watch", opts.op)
+		return fmt.Errorf("unsupported -op %q; expected get, move, resign, draw, or watch", opts.op)
 	}
 }
 
@@ -265,19 +269,14 @@ func (c *cliClient) requestSnapshot(ctx context.Context, roomID string) error {
 	}
 }
 
-func (c *cliClient) sendIntCommand(ctx context.Context, roomID string, op ruleshiftv1.IntOperation, value int64, strictRevision bool) error {
-	expectedRevision := uint64(0)
+func (c *cliClient) sendGameCommand(ctx context.Context, roomID string, command *ruleshiftv1.GameCommand, strictRevision bool) error {
 	if strictRevision {
-		expectedRevision = c.lastRevision
+		command.ExpectedRevision = c.lastRevision
 	}
+	command.RoomId = roomID
 
 	if err := c.send(ctx, &ruleshiftv1.ClientEnvelope{
-		Payload: &ruleshiftv1.ClientEnvelope_IntCommand{IntCommand: &ruleshiftv1.IntCommand{
-			RoomId:           roomID,
-			Operation:        op,
-			Value:            value,
-			ExpectedRevision: expectedRevision,
-		}},
+		Payload: &ruleshiftv1.ClientEnvelope_GameCommand{GameCommand: command},
 	}); err != nil {
 		return err
 	}
@@ -294,9 +293,7 @@ func (c *cliClient) sendIntCommand(ctx context.Context, roomID string, op rulesh
 		case *ruleshiftv1.ServerEnvelope_StateDelta:
 			c.applyDelta(payload.StateDelta)
 			printDelta(payload.StateDelta)
-			if payload.StateDelta.GetChangedByPlayerId() == c.playerID &&
-				payload.StateDelta.GetOperation() == op &&
-				payload.StateDelta.GetOperand() == value {
+			if payload.StateDelta.GetChangedByPlayerId() == c.playerID && matchesCommand(payload.StateDelta.GetXiangqi(), command) {
 				return nil
 			}
 		case *ruleshiftv1.ServerEnvelope_Error:
@@ -403,14 +400,50 @@ func (c *cliClient) read(ctx context.Context) (*ruleshiftv1.ServerEnvelope, erro
 }
 
 func (c *cliClient) applySnapshot(snapshot *ruleshiftv1.StateSnapshot) {
-	c.currentValue = snapshot.GetValue()
 	c.lastRevision = snapshot.GetRevision()
+	if xiangqi := snapshot.GetXiangqi(); xiangqi != nil {
+		c.currentFEN = xiangqi.GetFen()
+		c.stateHash = xiangqi.GetStateHash()
+	}
 }
 
 func (c *cliClient) applyDelta(delta *ruleshiftv1.StateDelta) {
 	if delta.GetNewRevision() >= c.lastRevision {
-		c.currentValue = delta.GetNewValue()
 		c.lastRevision = delta.GetNewRevision()
+		if xiangqi := delta.GetXiangqi(); xiangqi != nil {
+			c.stateHash = xiangqi.GetStateHash()
+		}
+	}
+}
+
+func moveCommand(move string) *ruleshiftv1.GameCommand {
+	return &ruleshiftv1.GameCommand{
+		Command: &ruleshiftv1.GameCommand_DoMove{DoMove: &ruleshiftv1.DoMove{MoveUci: strings.TrimSpace(move)}},
+	}
+}
+
+func resignCommand() *ruleshiftv1.GameCommand {
+	return &ruleshiftv1.GameCommand{Command: &ruleshiftv1.GameCommand_Resign{Resign: &ruleshiftv1.Resign{}}}
+}
+
+func offerDrawCommand() *ruleshiftv1.GameCommand {
+	return &ruleshiftv1.GameCommand{Command: &ruleshiftv1.GameCommand_OfferDraw{OfferDraw: &ruleshiftv1.OfferDraw{}}}
+}
+
+func matchesCommand(delta *ruleshiftv1.XiangqiDelta, command *ruleshiftv1.GameCommand) bool {
+	if delta == nil || command == nil {
+		return false
+	}
+	switch typed := command.GetCommand().(type) {
+	case *ruleshiftv1.GameCommand_DoMove:
+		return delta.GetCommandType() == ruleshiftv1.GameCommandType_GAME_COMMAND_TYPE_DO_MOVE &&
+			strings.EqualFold(delta.GetMoveUci(), typed.DoMove.GetMoveUci())
+	case *ruleshiftv1.GameCommand_Resign:
+		return delta.GetCommandType() == ruleshiftv1.GameCommandType_GAME_COMMAND_TYPE_RESIGN
+	case *ruleshiftv1.GameCommand_OfferDraw:
+		return delta.GetCommandType() == ruleshiftv1.GameCommandType_GAME_COMMAND_TYPE_OFFER_DRAW
+	default:
+		return false
 	}
 }
 
@@ -423,23 +456,52 @@ func printEnvelope(env *ruleshiftv1.ServerEnvelope) {
 }
 
 func printSnapshot(snapshot *ruleshiftv1.StateSnapshot) {
-	fmt.Printf("snapshot room=%s value=%d revision=%d\n", snapshot.GetRoomId(), snapshot.GetValue(), snapshot.GetRevision())
-}
-
-func printDelta(delta *ruleshiftv1.StateDelta) {
+	xiangqi := snapshot.GetXiangqi()
+	if xiangqi == nil {
+		fmt.Printf("snapshot room=%s revision=%d game=%s\n", snapshot.GetRoomId(), snapshot.GetRevision(), snapshot.GetGameType())
+		return
+	}
 	fmt.Printf(
-		"delta room=%s previous=%d new=%d revision=%d->%d changed_by=%s operation=%s operand=%d\n",
-		delta.GetRoomId(),
-		delta.GetPreviousValue(),
-		delta.GetNewValue(),
-		delta.GetPreviousRevision(),
-		delta.GetNewRevision(),
-		delta.GetChangedByPlayerId(),
-		shortOperation(delta.GetOperation()),
-		delta.GetOperand(),
+		"snapshot room=%s revision=%d hash=%d side=%s status=%s red=%s black=%s fen=%q\n",
+		snapshot.GetRoomId(),
+		snapshot.GetRevision(),
+		xiangqi.GetStateHash(),
+		shortSide(xiangqi.GetSideToMove()),
+		shortStatus(xiangqi.GetStatus()),
+		xiangqi.GetRedPlayerId(),
+		xiangqi.GetBlackPlayerId(),
+		xiangqi.GetFen(),
 	)
 }
 
-func shortOperation(op ruleshiftv1.IntOperation) string {
-	return strings.TrimPrefix(op.String(), "INT_OPERATION_")
+func printDelta(delta *ruleshiftv1.StateDelta) {
+	xiangqi := delta.GetXiangqi()
+	if xiangqi == nil {
+		fmt.Printf("delta room=%s revision=%d->%d changed_by=%s game=%s\n", delta.GetRoomId(), delta.GetPreviousRevision(), delta.GetNewRevision(), delta.GetChangedByPlayerId(), delta.GetGameType())
+		return
+	}
+	fmt.Printf(
+		"delta room=%s revision=%d->%d changed_by=%s command=%s move=%s hash=%d side=%s status=%s\n",
+		delta.GetRoomId(),
+		delta.GetPreviousRevision(),
+		delta.GetNewRevision(),
+		delta.GetChangedByPlayerId(),
+		shortCommand(xiangqi.GetCommandType()),
+		xiangqi.GetMoveUci(),
+		xiangqi.GetStateHash(),
+		shortSide(xiangqi.GetSideToMove()),
+		shortStatus(xiangqi.GetStatus()),
+	)
+}
+
+func shortCommand(command ruleshiftv1.GameCommandType) string {
+	return strings.TrimPrefix(command.String(), "GAME_COMMAND_TYPE_")
+}
+
+func shortSide(side ruleshiftv1.XiangqiSide) string {
+	return strings.TrimPrefix(side.String(), "XIANGQI_SIDE_")
+}
+
+func shortStatus(status ruleshiftv1.GameStatus) string {
+	return strings.TrimPrefix(status.String(), "GAME_STATUS_")
 }

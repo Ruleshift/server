@@ -4,23 +4,28 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/Ruleshift/server/internal/game"
+	"github.com/Ruleshift/server/internal/game/xiangqi"
 )
 
-func TestReplayEventsRestoresIntegerStateFromEventLog(t *testing.T) {
+func TestReplayEventsRestoresGameStateFromEventLog(t *testing.T) {
 	store := NewInMemoryEventStore()
+	module := testGameModule{}
 	runtime, cancel, done := startTestRuntimeWithConfig(t, RuntimeConfig{
 		InputQueueSize: 128,
 		EventStore:     store,
+		GameModule:     module,
 	})
 	defer stopTestRuntime(t, cancel, done)
 
 	ctx, cancelCtx := context.WithTimeout(context.Background(), time.Second)
 	defer cancelCtx()
 
-	commands := []IntCommand{
-		{RoomID: "room-1", PlayerID: "player-1", Operation: OperationAdd, Value: 5},
-		{RoomID: "room-1", PlayerID: "player-1", Operation: OperationAdd, Value: 8},
-		{RoomID: "room-1", PlayerID: "player-1", Operation: OperationSet, Value: 21},
+	commands := []GameCommand{
+		{RoomID: "room-1", PlayerID: "player-1", Type: game.CommandDoMove, Payload: xiangqi.Move{UCI: "a0a1"}},
+		{RoomID: "room-1", PlayerID: "player-1", Type: game.CommandDoMove, Payload: xiangqi.Move{UCI: "a0a1"}},
+		{RoomID: "room-1", PlayerID: "player-1", Type: game.CommandDoMove, Payload: xiangqi.Move{UCI: "a0a1"}},
 	}
 
 	for i, command := range commands {
@@ -41,25 +46,29 @@ func TestReplayEventsRestoresIntegerStateFromEventLog(t *testing.T) {
 	if len(events) != 4 {
 		t.Fatalf("event count = %d, want 4", len(events))
 	}
-	wantTypes := []EventType{EventTypeRoomCreated, EventTypeIntAdded, EventTypeIntAdded, EventTypeIntSet}
+	wantTypes := []EventType{EventTypeRoomCreated, EventTypeGameMoveApplied, EventTypeGameMoveApplied, EventTypeGameMoveApplied}
 	for i, wantType := range wantTypes {
 		if events[i].Type != wantType {
 			t.Fatalf("event[%d] type = %s, want %s", i, events[i].Type, wantType)
 		}
 	}
 
-	replayed, err := ReplayEvents(events)
+	replayed, err := ReplayEvents(module, events)
 	if err != nil {
 		t.Fatalf("ReplayEvents returned error: %v", err)
 	}
+	replayedSnapshot, err := BuildSnapshot(module, replayed)
+	if err != nil {
+		t.Fatalf("BuildSnapshot returned error: %v", err)
+	}
 
-	if replayed.Value != snapshot.Value {
-		t.Fatalf("replayed value = %d, want %d", replayed.Value, snapshot.Value)
+	if replayedSnapshot.Game.StateHash != snapshot.Game.StateHash {
+		t.Fatalf("replayed state hash = %d, want %d", replayedSnapshot.Game.StateHash, snapshot.Game.StateHash)
 	}
 	if replayed.Revision != snapshot.Revision {
 		t.Fatalf("replayed revision = %d, want %d", replayed.Revision, snapshot.Revision)
 	}
-	if replayed.Value != 21 || replayed.Revision != 3 {
-		t.Fatalf("replayed state = value %d revision %d, want 21/3", replayed.Value, replayed.Revision)
+	if replayedSnapshot.Game.StateHash != 3 || replayed.Revision != 3 {
+		t.Fatalf("replayed state = hash %d revision %d, want 3/3", replayedSnapshot.Game.StateHash, replayed.Revision)
 	}
 }

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/Ruleshift/server/internal/game"
 )
 
 var ErrNilPlayerSink = errors.New("player sink must not be nil")
@@ -16,10 +18,11 @@ type RuntimeConfig struct {
 	InputQueueSize          int
 	SlowConsumerStrikeLimit int
 	EventStore              EventStore
+	GameModule              game.Module
 }
 
 type RuntimeCommand struct {
-	Command      IntCommand
+	Command      GameCommand
 	CommandSink  PlayerSink
 	SnapshotOnly bool
 	SnapshotSent *snapshotSentRecord
@@ -57,6 +60,7 @@ type RoomRuntime struct {
 	subscribers map[string]PlayerSink
 	slowStrikes map[string]int
 	eventStore  EventStore
+	gameModule  game.Module
 	clock       func() time.Time
 }
 
@@ -70,9 +74,18 @@ func NewRuntime(roomID string, cfg RuntimeConfig) (*RoomRuntime, error) {
 	if cfg.SlowConsumerStrikeLimit <= 0 {
 		cfg.SlowConsumerStrikeLimit = 2
 	}
+	if cfg.GameModule == nil {
+		return nil, ErrNilGameModule
+	}
+
+	fmt.Println("THIS GAME TYPE IS", cfg.GameModule.Type())
 
 	now := time.Now().UTC()
-	state := NewState(roomID, now)
+	gameState, err := cfg.GameModule.NewState(now)
+	if err != nil {
+		return nil, fmt.Errorf("create game state: %w", err)
+	}
+	state := NewState(roomID, cfg.GameModule.Type(), gameState, now)
 	runtime := &RoomRuntime{
 		state:       state,
 		input:       make(chan RuntimeCommand, cfg.InputQueueSize),
@@ -81,6 +94,7 @@ func NewRuntime(roomID string, cfg RuntimeConfig) (*RoomRuntime, error) {
 		subscribers: make(map[string]PlayerSink),
 		slowStrikes: make(map[string]int),
 		eventStore:  cfg.EventStore,
+		gameModule:  cfg.GameModule,
 		clock: func() time.Time {
 			return time.Now().UTC()
 		},
@@ -91,18 +105,18 @@ func NewRuntime(roomID string, cfg RuntimeConfig) (*RoomRuntime, error) {
 	return runtime, nil
 }
 
-func (r *RoomRuntime) Submit(ctx context.Context, cmd IntCommand) (CommandResult, error) {
+func (r *RoomRuntime) Submit(ctx context.Context, cmd GameCommand) (CommandResult, error) {
 	return r.submit(ctx, nil, cmd)
 }
 
-func (r *RoomRuntime) SubmitFrom(ctx context.Context, sink PlayerSink, cmd IntCommand) (CommandResult, error) {
+func (r *RoomRuntime) SubmitFrom(ctx context.Context, sink PlayerSink, cmd GameCommand) (CommandResult, error) {
 	if sink == nil {
 		return CommandResult{}, ErrNilPlayerSink
 	}
 	return r.submit(ctx, sink, cmd)
 }
 
-func (r *RoomRuntime) submit(ctx context.Context, sink PlayerSink, cmd IntCommand) (CommandResult, error) {
+func (r *RoomRuntime) submit(ctx context.Context, sink PlayerSink, cmd GameCommand) (CommandResult, error) {
 	if r.isClosed() {
 		return CommandResult{}, ErrRuntimeClosed
 	}
@@ -248,34 +262,51 @@ func (r *RoomRuntime) Run(ctx context.Context) error {
 			return nil
 		case request := <-r.input:
 			if request.SnapshotOnly {
-				request.Reply <- CommandResult{Snapshot: BuildSnapshot(r.state)}
+				snapshot, err := r.snapshot()
+				request.Reply <- CommandResult{Snapshot: snapshot, Err: err}
 				continue
 			}
 			if request.SnapshotSent != nil {
 				err := r.recordSnapshotSent(request.SnapshotSent.PlayerID)
-				request.Reply <- CommandResult{Snapshot: BuildSnapshot(r.state), Err: err}
+				snapshot, snapshotErr := r.snapshot()
+				if err == nil {
+					err = snapshotErr
+				}
+				request.Reply <- CommandResult{Snapshot: snapshot, Err: err}
 				continue
 			}
 			if request.JoinSink != nil {
 				err := r.join(request.JoinSink)
-				request.Reply <- CommandResult{Snapshot: BuildSnapshot(r.state), Err: err}
+				snapshot, snapshotErr := r.snapshot()
+				if err == nil {
+					err = snapshotErr
+				}
+				request.Reply <- CommandResult{Snapshot: snapshot, Err: err}
 				continue
 			}
 			if request.LeaveSink != nil {
 				err := r.leave(request.LeaveSink, request.LeaveReason)
-				request.Reply <- CommandResult{Snapshot: BuildSnapshot(r.state), Err: err}
+				snapshot, snapshotErr := r.snapshot()
+				if err == nil {
+					err = snapshotErr
+				}
+				request.Reply <- CommandResult{Snapshot: snapshot, Err: err}
 				continue
 			}
 
 			if err := r.validateCommandSink(request.CommandSink, request.Command.PlayerID); err != nil {
-				request.Reply <- CommandResult{Snapshot: BuildSnapshot(r.state), Err: err}
+				snapshot, snapshotErr := r.snapshot()
+				if snapshotErr != nil {
+					err = fmt.Errorf("%w; build snapshot: %v", err, snapshotErr)
+				}
+				request.Reply <- CommandResult{Snapshot: snapshot, Err: err}
 				continue
 			}
 
-			next, delta, err := ApplyIntCommand(r.state, request.Command, r.clock())
+			next, delta, err := ApplyGameCommand(r.gameModule, r.state, request.Command, r.clock())
 			outcome := broadcastOutcome{}
 			if err == nil {
-				event, eventErr := NewIntEvent(delta)
+				event, eventErr := NewGameCommandEvent(delta)
 				if eventErr != nil {
 					err = eventErr
 				} else if eventErr := r.appendEvent(event); eventErr != nil {
@@ -285,8 +316,12 @@ func (r *RoomRuntime) Run(ctx context.Context) error {
 					outcome = r.broadcast(delta)
 				}
 			}
+			snapshot, snapshotErr := r.snapshot()
+			if err == nil {
+				err = snapshotErr
+			}
 			request.Reply <- CommandResult{
-				Snapshot:                  BuildSnapshot(r.state),
+				Snapshot:                  snapshot,
 				Delta:                     delta,
 				BroadcastCount:            outcome.delivered,
 				SnapshotCompactions:       outcome.snapshotCompactions,
@@ -317,6 +352,12 @@ func (r *RoomRuntime) join(sink PlayerSink) error {
 			return err
 		}
 	}
+	gameState, err := r.gameModule.PlayerJoined(r.state.GameState, playerID)
+	if err != nil {
+		return fmt.Errorf("game player joined: %w", err)
+	}
+	r.state.GameState = gameState
+	r.state.UpdatedAt = r.clock()
 	r.subscribers[playerID] = sink
 	r.slowStrikes[playerID] = 0
 	return r.appendEvent(NewPlayerJoinedEvent(r.state, playerID, r.clock()))
@@ -370,7 +411,7 @@ type broadcastOutcome struct {
 
 func (r *RoomRuntime) broadcast(delta StateDelta) broadcastOutcome {
 	outcome := broadcastOutcome{failures: make([]BroadcastFailure, 0)}
-	snapshot := BuildSnapshot(r.state)
+	snapshot, snapshotErr := r.snapshot()
 
 	for playerID, subscriber := range r.subscribers {
 		err := subscriber.Send(context.Background(), DeltaEnvelope(delta))
@@ -398,6 +439,23 @@ func (r *RoomRuntime) broadcast(delta StateDelta) broadcastOutcome {
 
 		r.slowStrikes[playerID]++
 		if r.slowStrikes[playerID] >= r.cfg.SlowConsumerStrikeLimit {
+			subscriber.Close(CloseReasonSlowConsumer)
+			if eventErr := r.recordPlayerDisconnected(playerID, CloseReasonSlowConsumer); eventErr != nil {
+				outcome.failures = append(outcome.failures, BroadcastFailure{
+					PlayerID: playerID,
+					Err:      fmt.Errorf("record slow-consumer disconnect for player %q: %w", playerID, eventErr),
+				})
+			}
+			r.removeSubscriber(playerID)
+			outcome.disconnected++
+			continue
+		}
+
+		if snapshotErr != nil {
+			outcome.failures = append(outcome.failures, BroadcastFailure{
+				PlayerID: playerID,
+				Err:      fmt.Errorf("build compacted snapshot for player %q: %w", playerID, snapshotErr),
+			})
 			subscriber.Close(CloseReasonSlowConsumer)
 			if eventErr := r.recordPlayerDisconnected(playerID, CloseReasonSlowConsumer); eventErr != nil {
 				outcome.failures = append(outcome.failures, BroadcastFailure{
@@ -446,7 +504,11 @@ func (r *RoomRuntime) shutdown(reason string) {
 }
 
 func (r *RoomRuntime) recordSnapshotSent(playerID string) error {
-	return r.appendEvent(NewSnapshotSentEvent(BuildSnapshot(r.state), playerID, r.clock()))
+	snapshot, err := r.snapshot()
+	if err != nil {
+		return err
+	}
+	return r.appendEvent(NewSnapshotSentEvent(snapshot, playerID, r.clock()))
 }
 
 func (r *RoomRuntime) recordPlayerDisconnected(playerID string, reason string) error {
@@ -461,6 +523,10 @@ func (r *RoomRuntime) appendEvent(event RoomEvent) error {
 		return fmt.Errorf("append room event: %w", err)
 	}
 	return nil
+}
+
+func (r *RoomRuntime) snapshot() (StateSnapshot, error) {
+	return BuildSnapshot(r.gameModule, r.state)
 }
 
 func (r *RoomRuntime) removeSubscriber(playerID string) {

@@ -10,12 +10,13 @@ func BenchmarkClientEnvelopeCodec(b *testing.B) {
 	env := &ruleshiftv1.ClientEnvelope{
 		ProtocolVersion: CurrentVersion,
 		ClientSequence:  1,
-		Payload: &ruleshiftv1.ClientEnvelope_IntCommand{
-			IntCommand: &ruleshiftv1.IntCommand{
+		Payload: &ruleshiftv1.ClientEnvelope_GameCommand{
+			GameCommand: &ruleshiftv1.GameCommand{
 				RoomId:           "room-1",
-				Operation:        ruleshiftv1.IntOperation_INT_OPERATION_ADD,
-				Value:            5,
 				ExpectedRevision: 10,
+				Command: &ruleshiftv1.GameCommand_DoMove{
+					DoMove: &ruleshiftv1.DoMove{FromSquare: 1, ToSquare: 2, MoveUci: "a0a1"},
+				},
 			},
 		},
 	}
@@ -39,13 +40,25 @@ func BenchmarkServerEnvelopeCodec(b *testing.B) {
 		Payload: &ruleshiftv1.ServerEnvelope_StateDelta{
 			StateDelta: &ruleshiftv1.StateDelta{
 				RoomId:            "room-1",
-				PreviousValue:     4,
-				NewValue:          9,
 				PreviousRevision:  10,
 				NewRevision:       11,
 				ChangedByPlayerId: "player-1",
-				Operation:         ruleshiftv1.IntOperation_INT_OPERATION_ADD,
-				Operand:           5,
+				GameType:          ruleshiftv1.GameType_GAME_TYPE_XIANGQI,
+				Delta: &ruleshiftv1.StateDelta_Xiangqi{
+					Xiangqi: &ruleshiftv1.XiangqiDelta{
+						CommandType: ruleshiftv1.GameCommandType_GAME_COMMAND_TYPE_DO_MOVE,
+						MoveUci:     "a0a1",
+						FromSquare:  1,
+						ToSquare:    2,
+						SquareUpdates: []*ruleshiftv1.SquareUpdate{
+							{Square: 1, Piece: 0},
+							{Square: 2, Piece: 1},
+						},
+						SideToMove: ruleshiftv1.XiangqiSide_XIANGQI_SIDE_BLACK,
+						Status:     ruleshiftv1.GameStatus_GAME_STATUS_ACTIVE,
+						StateHash:  123,
+					},
+				},
 			},
 		},
 	}

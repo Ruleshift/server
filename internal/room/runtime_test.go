@@ -3,6 +3,7 @@ package room
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sort"
 	"sync"
@@ -10,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Ruleshift/server/internal/game"
+	"github.com/Ruleshift/server/internal/game/xiangqi"
 	ruleshiftv1 "github.com/Ruleshift/server/internal/protocol/generated/go/ruleshiftv1"
 )
 
@@ -27,19 +30,14 @@ func TestRoomRuntimeBroadcastsSameDeltasToAllJoinedClients(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Join player-1 returned error: %v", err)
 	}
-	if snapshot.Revision != 0 || snapshot.Value != 0 {
-		t.Fatalf("initial snapshot = value %d revision %d, want 0/0", snapshot.Value, snapshot.Revision)
+	if snapshot.Revision != 0 || snapshot.Game.StateHash != 0 {
+		t.Fatalf("initial snapshot = hash %d revision %d, want 0/0", snapshot.Game.StateHash, snapshot.Revision)
 	}
 	if _, err := runtime.Join(ctx, player2); err != nil {
 		t.Fatalf("Join player-2 returned error: %v", err)
 	}
 
-	result, err := runtime.Submit(ctx, IntCommand{
-		RoomID:    "room-1",
-		PlayerID:  "player-1",
-		Operation: OperationAdd,
-		Value:     5,
-	})
+	result, err := runtime.Submit(ctx, testMoveCommand("player-1", "a0a1"))
 	if err != nil {
 		t.Fatalf("Submit returned error: %v", err)
 	}
@@ -55,8 +53,8 @@ func TestRoomRuntimeBroadcastsSameDeltasToAllJoinedClients(t *testing.T) {
 	if !reflect.DeepEqual(got1, got2) {
 		t.Fatalf("joined clients received different deltas:\n%#v\n%#v", got1, got2)
 	}
-	if got1[0].NewRevision != 1 || got1[0].NewValue != 5 {
-		t.Fatalf("delta = value %d revision %d, want 5/1", got1[0].NewValue, got1[0].NewRevision)
+	if got1[0].NewRevision != 1 || got1[0].Game.StateHash != 1 {
+		t.Fatalf("delta = hash %d revision %d, want 1/1", got1[0].Game.StateHash, got1[0].NewRevision)
 	}
 }
 
@@ -73,12 +71,7 @@ func TestRoomRuntimeConcurrentCommandsHaveLinearRevisions(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 
-			result, err := runtime.Submit(ctx, IntCommand{
-				RoomID:    "room-1",
-				PlayerID:  "player-concurrent",
-				Operation: OperationAdd,
-				Value:     1,
-			})
+			result, err := runtime.Submit(ctx, testMoveCommand("player-concurrent", "a0a1"))
 			if err != nil {
 				errs <- err
 				return
@@ -114,8 +107,8 @@ func TestRoomRuntimeConcurrentCommandsHaveLinearRevisions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot returned error: %v", err)
 	}
-	if snapshot.Value != commands {
-		t.Fatalf("snapshot value = %d, want %d", snapshot.Value, commands)
+	if snapshot.Game.StateHash != commands {
+		t.Fatalf("snapshot hash = %d, want %d", snapshot.Game.StateHash, commands)
 	}
 	if snapshot.Revision != commands {
 		t.Fatalf("snapshot revision = %d, want %d", snapshot.Revision, commands)
@@ -134,13 +127,13 @@ func TestRoomRuntimeRejectsInvalidCommandWithoutBroadcast(t *testing.T) {
 		t.Fatalf("Join returned error: %v", err)
 	}
 
-	result, err := runtime.Submit(ctx, IntCommand{
-		RoomID:    "room-1",
-		PlayerID:  "player-1",
-		Operation: OperationUnspecified,
+	result, err := runtime.Submit(ctx, GameCommand{
+		RoomID:   "room-1",
+		PlayerID: "player-1",
+		Type:     game.CommandUnspecified,
 	})
-	if !errors.Is(err, ErrInvalidOperation) {
-		t.Fatalf("Submit error = %v, want ErrInvalidOperation", err)
+	if !errors.Is(err, game.ErrInvalidCommand) {
+		t.Fatalf("Submit error = %v, want game.ErrInvalidCommand", err)
 	}
 	if result.BroadcastCount != 0 {
 		t.Fatalf("BroadcastCount = %d, want 0", result.BroadcastCount)
@@ -166,12 +159,7 @@ func TestRoomRuntimeCompactsSlowConsumerQueueToSnapshot(t *testing.T) {
 		t.Fatalf("Join returned error: %v", err)
 	}
 
-	first, err := runtime.Submit(ctx, IntCommand{
-		RoomID:    "room-1",
-		PlayerID:  "player-1",
-		Operation: OperationAdd,
-		Value:     1,
-	})
+	first, err := runtime.Submit(ctx, testMoveCommand("player-1", "a0a1"))
 	if err != nil {
 		t.Fatalf("first Submit returned error: %v", err)
 	}
@@ -179,12 +167,7 @@ func TestRoomRuntimeCompactsSlowConsumerQueueToSnapshot(t *testing.T) {
 		t.Fatalf("first BroadcastCount = %d, want 1", first.BroadcastCount)
 	}
 
-	second, err := runtime.Submit(ctx, IntCommand{
-		RoomID:    "room-1",
-		PlayerID:  "player-1",
-		Operation: OperationAdd,
-		Value:     1,
-	})
+	second, err := runtime.Submit(ctx, testMoveCommand("player-1", "a0a1"))
 	if err != nil {
 		t.Fatalf("second Submit returned error: %v", err)
 	}
@@ -200,8 +183,8 @@ func TestRoomRuntimeCompactsSlowConsumerQueueToSnapshot(t *testing.T) {
 	if snapshot == nil {
 		t.Fatalf("payload = nil, want StateSnapshot")
 	}
-	if snapshot.GetValue() != 2 || snapshot.GetRevision() != 2 {
-		t.Fatalf("snapshot = value %d revision %d, want 2/2", snapshot.GetValue(), snapshot.GetRevision())
+	if snapshot.GetXiangqi().GetStateHash() != 2 || snapshot.GetRevision() != 2 {
+		t.Fatalf("snapshot = hash %d revision %d, want 2/2", snapshot.GetXiangqi().GetStateHash(), snapshot.GetRevision())
 	}
 }
 
@@ -222,12 +205,7 @@ func TestRoomRuntimeDisconnectsPersistentSlowConsumer(t *testing.T) {
 	}
 
 	for i := 0; i < 3; i++ {
-		result, err := runtime.Submit(ctx, IntCommand{
-			RoomID:    "room-1",
-			PlayerID:  "player-1",
-			Operation: OperationAdd,
-			Value:     1,
-		})
+		result, err := runtime.Submit(ctx, testMoveCommand("player-1", "a0a1"))
 		if err != nil {
 			t.Fatalf("Submit %d returned error: %v", i, err)
 		}
@@ -297,35 +275,34 @@ func TestRoomRuntimeReplacesSessionAndIgnoresOldCommands(t *testing.T) {
 		t.Fatalf("old close reason = %q, want %q", oldSession.CloseReason(), CloseReasonReplaced)
 	}
 
-	_, err := runtime.SubmitFrom(ctx, oldSession, IntCommand{
-		RoomID:    "room-1",
-		PlayerID:  "player-1",
-		Operation: OperationAdd,
-		Value:     10,
-	})
+	_, err := runtime.SubmitFrom(ctx, oldSession, testMoveCommand("player-1", "a0a1"))
 	if !errors.Is(err, ErrStalePlayerSession) {
 		t.Fatalf("old SubmitFrom error = %v, want ErrStalePlayerSession", err)
 	}
 
-	result, err := runtime.SubmitFrom(ctx, newSession, IntCommand{
-		RoomID:    "room-1",
-		PlayerID:  "player-1",
-		Operation: OperationAdd,
-		Value:     3,
-	})
+	result, err := runtime.SubmitFrom(ctx, newSession, testMoveCommand("player-1", "a0a1"))
 	if err != nil {
 		t.Fatalf("new SubmitFrom returned error: %v", err)
 	}
-	if result.Snapshot.Value != 3 || result.Snapshot.Revision != 1 {
-		t.Fatalf("snapshot = value %d revision %d, want 3/1", result.Snapshot.Value, result.Snapshot.Revision)
+	if result.Snapshot.Game.StateHash != 1 || result.Snapshot.Revision != 1 {
+		t.Fatalf("snapshot = hash %d revision %d, want 1/1", result.Snapshot.Game.StateHash, result.Snapshot.Revision)
 	}
 
 	snapshot, err := runtime.Snapshot(ctx)
 	if err != nil {
 		t.Fatalf("Snapshot returned error: %v", err)
 	}
-	if snapshot.Value != 3 || snapshot.Revision != 1 {
-		t.Fatalf("runtime snapshot = value %d revision %d, want 3/1", snapshot.Value, snapshot.Revision)
+	if snapshot.Game.StateHash != 1 || snapshot.Revision != 1 {
+		t.Fatalf("runtime snapshot = hash %d revision %d, want 1/1", snapshot.Game.StateHash, snapshot.Revision)
+	}
+}
+
+func testMoveCommand(playerID string, move string) GameCommand {
+	return GameCommand{
+		RoomID:   "room-1",
+		PlayerID: playerID,
+		Type:     game.CommandDoMove,
+		Payload:  xiangqi.Move{FromSquare: 1, ToSquare: 2, UCI: move},
 	}
 }
 
@@ -337,6 +314,12 @@ func startTestRuntime(t *testing.T) (*RoomRuntime, context.CancelFunc, <-chan er
 
 func startTestRuntimeWithConfig(t *testing.T, cfg RuntimeConfig) (*RoomRuntime, context.CancelFunc, <-chan error) {
 	t.Helper()
+
+	if cfg.GameModule == nil {
+		cfg.GameModule = testGameModule{}
+	}
+
+	fmt.Println("CREATED RUNTIME WITH module ", cfg.GameModule, cfg.GameModule.Type())
 
 	runtime, err := NewRuntime("room-1", cfg)
 	if err != nil {
@@ -530,25 +513,85 @@ func (s *boundedTestSink) read(t *testing.T) *ruleshiftv1.ServerEnvelope {
 }
 
 func stateDeltaFromProto(delta *ruleshiftv1.StateDelta) StateDelta {
+	gameDelta := game.Delta{
+		Type: game.TypeXiangqi,
+	}
+	if protoDelta := delta.GetXiangqi(); protoDelta != nil {
+		gameDelta.CommandType = commandTypeFromProto(protoDelta.GetCommandType())
+		gameDelta.Status = statusFromProto(protoDelta.GetStatus())
+		gameDelta.StateHash = protoDelta.GetStateHash()
+
+		move := xiangqi.Move{
+			FromSquare: protoDelta.GetFromSquare(),
+			ToSquare:   protoDelta.GetToSquare(),
+			UCI:        protoDelta.GetMoveUci(),
+		}
+		if gameDelta.CommandType == game.CommandDoMove {
+			gameDelta.CommandPayload = move
+		}
+
+		payload := xiangqi.Delta{
+			Delta:                 gameDelta,
+			MoveUCI:               protoDelta.GetMoveUci(),
+			FromSquare:            protoDelta.GetFromSquare(),
+			ToSquare:              protoDelta.GetToSquare(),
+			SideToMove:            sideFromProto(protoDelta.GetSideToMove()),
+			WinnerPlayerID:        protoDelta.GetWinnerPlayerId(),
+			DrawOfferedByPlayerID: protoDelta.GetDrawOfferedByPlayerId(),
+		}
+		for _, update := range protoDelta.GetSquareUpdates() {
+			payload.SquareUpdates = append(payload.SquareUpdates, xiangqi.SquareUpdate{
+				Square: update.GetSquare(),
+				Piece:  update.GetPiece(),
+			})
+		}
+		gameDelta.Payload = payload
+	}
+
 	return StateDelta{
 		RoomID:            delta.GetRoomId(),
-		PreviousValue:     delta.GetPreviousValue(),
-		NewValue:          delta.GetNewValue(),
 		PreviousRevision:  delta.GetPreviousRevision(),
 		NewRevision:       delta.GetNewRevision(),
 		ChangedByPlayerID: delta.GetChangedByPlayerId(),
-		Operation:         operationFromProto(delta.GetOperation()),
-		Operand:           delta.GetOperand(),
+		Game:              gameDelta,
 	}
 }
 
-func operationFromProto(operation ruleshiftv1.IntOperation) Operation {
-	switch operation {
-	case ruleshiftv1.IntOperation_INT_OPERATION_ADD:
-		return OperationAdd
-	case ruleshiftv1.IntOperation_INT_OPERATION_SET:
-		return OperationSet
+func commandTypeFromProto(commandType ruleshiftv1.GameCommandType) game.CommandType {
+	switch commandType {
+	case ruleshiftv1.GameCommandType_GAME_COMMAND_TYPE_DO_MOVE:
+		return game.CommandDoMove
+	case ruleshiftv1.GameCommandType_GAME_COMMAND_TYPE_RESIGN:
+		return game.CommandResign
+	case ruleshiftv1.GameCommandType_GAME_COMMAND_TYPE_OFFER_DRAW:
+		return game.CommandOfferDraw
 	default:
-		return OperationUnspecified
+		return game.CommandUnspecified
+	}
+}
+
+func sideFromProto(side ruleshiftv1.XiangqiSide) xiangqi.Side {
+	switch side {
+	case ruleshiftv1.XiangqiSide_XIANGQI_SIDE_RED:
+		return xiangqi.SideRed
+	case ruleshiftv1.XiangqiSide_XIANGQI_SIDE_BLACK:
+		return xiangqi.SideBlack
+	default:
+		return xiangqi.SideUnspecified
+	}
+}
+
+func statusFromProto(status ruleshiftv1.GameStatus) game.Status {
+	switch status {
+	case ruleshiftv1.GameStatus_GAME_STATUS_ACTIVE:
+		return game.StatusActive
+	case ruleshiftv1.GameStatus_GAME_STATUS_RESIGNED:
+		return game.StatusResigned
+	case ruleshiftv1.GameStatus_GAME_STATUS_DRAW_OFFERED:
+		return game.StatusDrawOffered
+	case ruleshiftv1.GameStatus_GAME_STATUS_DRAWN:
+		return game.StatusDrawn
+	default:
+		return game.StatusUnspecified
 	}
 }

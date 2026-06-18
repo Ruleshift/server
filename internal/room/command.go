@@ -4,46 +4,42 @@ import (
 	"errors"
 	"fmt"
 	"time"
-)
 
-type Operation uint8
-
-const (
-	OperationUnspecified Operation = iota
-	OperationAdd
-	OperationSet
+	"github.com/Ruleshift/server/internal/game"
 )
 
 var (
-	ErrInvalidOperation = errors.New("invalid room operation")
+	ErrInvalidCommand   = errors.New("invalid room command")
 	ErrRevisionMismatch = errors.New("expected revision does not match room revision")
 	ErrRoomIDMismatch   = errors.New("command room id does not match runtime room id")
 	ErrEmptyPlayerID    = errors.New("player id must not be empty")
 	ErrEmptyRoomID      = errors.New("room id must not be empty")
+	ErrNilGameModule    = errors.New("game module must not be nil")
 )
 
-type IntCommand struct {
+type GameCommand struct {
 	RoomID           string
 	PlayerID         string
-	Operation        Operation
-	Value            int64
+	Type             game.CommandType
+	Payload          any
 	ExpectedRevision uint64
 	ReceivedAt       time.Time
 }
 
 type StateDelta struct {
 	RoomID            string
-	PreviousValue     int64
-	NewValue          int64
 	PreviousRevision  uint64
 	NewRevision       uint64
 	ChangedByPlayerID string
-	Operation         Operation
-	Operand           int64
+	Game              game.Delta
 	AppliedAt         time.Time
 }
 
-func ApplyIntCommand(state RoomState, cmd IntCommand, now time.Time) (RoomState, StateDelta, error) {
+func ApplyGameCommand(module game.Module, state RoomState, cmd GameCommand, now time.Time) (RoomState, StateDelta, error) {
+	fmt.Println("module ", module.Type())
+	if module == nil {
+		return state, StateDelta{}, ErrNilGameModule
+	}
 	if cmd.PlayerID == "" {
 		return state, StateDelta{}, ErrEmptyPlayerID
 	}
@@ -57,35 +53,35 @@ func ApplyIntCommand(state RoomState, cmd IntCommand, now time.Time) (RoomState,
 		return state, StateDelta{}, fmt.Errorf("%w: expected=%d actual=%d", ErrRevisionMismatch, cmd.ExpectedRevision, state.Revision)
 	}
 
-	previousValue := state.Value
 	previousRevision := state.Revision
-
-	switch cmd.Operation {
-	case OperationAdd:
-		state.Value += cmd.Value
-	case OperationSet:
-		state.Value = cmd.Value
-	default:
-		return state, StateDelta{}, fmt.Errorf("%w: %d", ErrInvalidOperation, cmd.Operation)
+	nextGameState, gameDelta, err := module.Apply(state.GameState, game.Command{
+		PlayerID: cmd.PlayerID,
+		Type:     cmd.Type,
+		Payload:  cmd.Payload,
+		At:       now,
+	})
+	if err != nil {
+		return state, StateDelta{}, err
+	}
+	if gameDelta.Type == game.TypeUnspecified {
+		return state, StateDelta{}, ErrInvalidCommand
 	}
 
+	state.GameState = nextGameState
+	state.GameType = module.Type()
 	state.Revision++
 	state.UpdatedAt = now
 
-	previous := RoomState{RoomID: state.RoomID, Value: previousValue, Revision: previousRevision}
-	return state, BuildDelta(previous, state, cmd, now), nil
+	return state, BuildDelta(state.RoomID, previousRevision, state.Revision, cmd.PlayerID, gameDelta, now), nil
 }
 
-func BuildDelta(previous RoomState, next RoomState, cmd IntCommand, appliedAt time.Time) StateDelta {
+func BuildDelta(roomID string, previousRevision uint64, newRevision uint64, playerID string, gameDelta game.Delta, appliedAt time.Time) StateDelta {
 	return StateDelta{
-		RoomID:            next.RoomID,
-		PreviousValue:     previous.Value,
-		NewValue:          next.Value,
-		PreviousRevision:  previous.Revision,
-		NewRevision:       next.Revision,
-		ChangedByPlayerID: cmd.PlayerID,
-		Operation:         cmd.Operation,
-		Operand:           cmd.Value,
+		RoomID:            roomID,
+		PreviousRevision:  previousRevision,
+		NewRevision:       newRevision,
+		ChangedByPlayerID: playerID,
+		Game:              gameDelta,
 		AppliedAt:         appliedAt,
 	}
 }

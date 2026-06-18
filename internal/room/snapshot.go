@@ -1,15 +1,25 @@
 package room
 
+import "github.com/Ruleshift/server/internal/game"
+
 type StateSnapshot struct {
 	RoomID   string
-	Value    int64
 	Revision uint64
+	Game     game.Snapshot
 }
 
-func BuildSnapshot(state RoomState) StateSnapshot {
+func BuildSnapshot(module game.Module, state RoomState) (StateSnapshot, error) {
+	if module == nil {
+		return StateSnapshot{}, ErrNilGameModule
+	}
+
+	snapshot, err := module.Snapshot(state.GameState)
+	if err != nil {
+		return StateSnapshot{}, err
+	}
 	return StateSnapshot{
 		RoomID:   state.RoomID,
-		Value:    state.Value,
 		Revision: state.Revision,
-	}
+		Game:     snapshot,
+	}, nil
 }
