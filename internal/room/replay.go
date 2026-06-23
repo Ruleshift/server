@@ -58,19 +58,31 @@ func ReplayEvents(module game.Module, events []RoomEvent) (RoomState, error) {
 		}
 
 		switch event.Type {
-		case EventTypeGameMoveApplied, EventTypePlayerResigned, EventTypeDrawOffered:
+		case EventTypeGameMoveApplied, EventTypePlayerResigned, EventTypeDrawOffered, EventTypeSecretSet:
 			next, err := replayGameEvent(module, state, event)
 			if err != nil {
 				return state, err
 			}
 			state = next
 		case EventTypePlayerJoined:
-			gameState, err := module.PlayerJoined(state.GameState, event.PlayerID)
+			gameState, changed, err := module.PlayerJoined(state.GameState, event.PlayerID)
 			if err != nil {
 				return state, fmt.Errorf("replay player joined: %w", err)
 			}
 			state.GameState = gameState
+			if event.NewRevision != 0 {
+				if !changed || event.PreviousRevision != state.Revision || event.NewRevision != event.PreviousRevision+1 {
+					return state, fmt.Errorf("replay invalid player join revision: previous=%d new=%d current=%d", event.PreviousRevision, event.NewRevision, state.Revision)
+				}
+				state.Revision = event.NewRevision
+			}
 			state.UpdatedAt = nonZeroTime(event.OccurredAt, state.UpdatedAt)
+			if event.StateHash != 0 {
+				snapshot, snapshotErr := BuildSnapshot(module, state)
+				if snapshotErr != nil || snapshot.Game.StateHash != event.StateHash {
+					return state, fmt.Errorf("replay player join state hash mismatch")
+				}
+			}
 		case EventTypeSnapshotSent, EventTypePlayerDisconnected:
 			continue
 		default:

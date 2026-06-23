@@ -15,11 +15,11 @@ func TestModuleAppliesLegalMovesAndSeatsPlayers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewState returned error: %v", err)
 	}
-	state, err = module.PlayerJoined(state, "player-red")
+	state, _, err = module.PlayerJoined(state, "player-red")
 	if err != nil {
 		t.Fatalf("join red returned error: %v", err)
 	}
-	state, err = module.PlayerJoined(state, "player-black")
+	state, _, err = module.PlayerJoined(state, "player-black")
 	if err != nil {
 		t.Fatalf("join black returned error: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestModuleDoesNotMutateUncommittedState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewState returned error: %v", err)
 	}
-	joined, err := module.PlayerJoined(original, "player-red")
+	joined, _, err := module.PlayerJoined(original, "player-red")
 	if err != nil {
 		t.Fatalf("PlayerJoined returned error: %v", err)
 	}

@@ -53,13 +53,13 @@ func (s *EventStore) Append(ctx context.Context, event room.RoomEvent) (room.Roo
 	err = tx.QueryRowContext(ctx, `
 INSERT INTO room_events(
     room_id, event_type, player_id, revision, previous_revision, new_revision,
-    game_type, command_type, command_payload, state_hash, game_status, reason, occurred_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+    game_type, command_type, command_payload, state_hash, game_status, view_scope, reason, occurred_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 RETURNING sequence`,
 		event.RoomID, string(event.Type), event.PlayerID,
 		uintString(event.Revision), uintString(event.PreviousRevision), uintString(event.NewRevision),
 		int16(event.GameType), int16(event.CommandType), nullableJSON(payload), uintString(event.StateHash),
-		int16(event.Status), event.Reason, event.OccurredAt,
+		int16(event.Status), int16(event.ViewScope), event.Reason, event.OccurredAt,
 	).Scan(&sequence)
 	if err != nil {
 		return room.RoomEvent{}, fmt.Errorf("insert room event: %w", err)
@@ -81,7 +81,7 @@ func (s *EventStore) List(ctx context.Context, roomID string) ([]room.RoomEvent,
 	rows, err := s.db.QueryContext(ctx, `
 SELECT sequence, event_type, room_id, player_id,
        revision::text, previous_revision::text, new_revision::text,
-       game_type, command_type, command_payload, state_hash::text, game_status, reason, occurred_at
+       game_type, command_type, command_payload, state_hash::text, game_status, view_scope, reason, occurred_at
 FROM room_events
 WHERE room_id = $1
 ORDER BY sequence`, roomID)
@@ -96,12 +96,12 @@ ORDER BY sequence`, roomID)
 		var sequence int64
 		var eventType string
 		var revision, previousRevision, newRevision, stateHash string
-		var gameType, commandType, status int16
+		var gameType, commandType, status, viewScope int16
 		var payload []byte
 		if err := rows.Scan(
 			&sequence, &eventType, &event.RoomID, &event.PlayerID,
 			&revision, &previousRevision, &newRevision,
-			&gameType, &commandType, &payload, &stateHash, &status, &event.Reason, &event.OccurredAt,
+			&gameType, &commandType, &payload, &stateHash, &status, &viewScope, &event.Reason, &event.OccurredAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan room event: %w", err)
 		}
@@ -110,6 +110,7 @@ ORDER BY sequence`, roomID)
 		event.GameType = game.Type(gameType)
 		event.CommandType = game.CommandType(commandType)
 		event.Status = game.Status(status)
+		event.ViewScope = game.ViewScope(viewScope)
 		if event.Revision, err = parseUint("revision", revision); err != nil {
 			return nil, err
 		}
@@ -153,6 +154,11 @@ ON CONFLICT (room_id, player_id) DO UPDATE SET
 		if err != nil {
 			return fmt.Errorf("project player joined: %w", err)
 		}
+		if event.NewRevision != 0 {
+			if err := projectRoomRevision(ctx, tx, event); err != nil {
+				return err
+			}
+		}
 	case room.EventTypePlayerDisconnected:
 		_, err := tx.ExecContext(ctx, `
 UPDATE room_players SET last_disconnected_at = $3, last_disconnect_reason = $4
@@ -160,20 +166,25 @@ WHERE room_id = $1 AND player_id = $2`, event.RoomID, event.PlayerID, event.Occu
 		if err != nil {
 			return fmt.Errorf("project player disconnected: %w", err)
 		}
-	case room.EventTypeGameMoveApplied, room.EventTypePlayerResigned, room.EventTypeDrawOffered:
-		result, err := tx.ExecContext(ctx, `
+	case room.EventTypeGameMoveApplied, room.EventTypePlayerResigned, room.EventTypeDrawOffered, room.EventTypeSecretSet:
+		return projectRoomRevision(ctx, tx, event)
+	}
+	return nil
+}
+
+func projectRoomRevision(ctx context.Context, tx *sql.Tx, event room.RoomEvent) error {
+	result, err := tx.ExecContext(ctx, `
 UPDATE rooms SET revision = $2, updated_at = $3 WHERE id = $1 AND revision = $4`,
-			event.RoomID, uintString(event.NewRevision), event.OccurredAt, uintString(event.PreviousRevision))
-		if err != nil {
-			return fmt.Errorf("project room revision: %w", err)
-		}
-		changed, err := result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("inspect projected room revision: %w", err)
-		}
-		if changed != 1 {
-			return fmt.Errorf("project room revision conflict: room=%q previous=%d new=%d", event.RoomID, event.PreviousRevision, event.NewRevision)
-		}
+		event.RoomID, uintString(event.NewRevision), event.OccurredAt, uintString(event.PreviousRevision))
+	if err != nil {
+		return fmt.Errorf("project room revision: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("inspect projected room revision: %w", err)
+	}
+	if changed != 1 {
+		return fmt.Errorf("project room revision conflict: room=%q previous=%d new=%d", event.RoomID, event.PreviousRevision, event.NewRevision)
 	}
 	return nil
 }

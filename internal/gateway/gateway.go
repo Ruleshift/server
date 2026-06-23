@@ -11,6 +11,7 @@ import (
 
 	"github.com/Ruleshift/server/internal/auth"
 	"github.com/Ruleshift/server/internal/game"
+	"github.com/Ruleshift/server/internal/game/hiddennumber"
 	"github.com/Ruleshift/server/internal/game/xiangqi"
 	"github.com/Ruleshift/server/internal/protocol"
 	ruleshiftv1 "github.com/Ruleshift/server/internal/protocol/generated/go/ruleshiftv1"
@@ -235,24 +236,33 @@ func (g *Gateway) handleJoinRoom(ctx context.Context, state *connectionState, pa
 		}()
 	}
 
-	snapshot, err := runtime.Join(ctx, state.session)
+	joinMode := fromProtoJoinMode(payload.GetJoinMode())
+	viewScope := game.ViewScopePlayer
+	if joinMode == game.JoinModeSpectator {
+		viewScope = game.ViewScopePublic
+		if state.identity.Permissions.Has(auth.PermissionViewFullState) {
+			viewScope = game.ViewScopeFull
+		}
+	}
+	viewer := game.Viewer{PlayerID: state.identity.PlayerID, JoinMode: joinMode, Scope: viewScope}
+	snapshot, err := runtime.Join(ctx, state.session, viewer)
 	if err != nil {
+		if errors.Is(err, game.ErrRoomFull) {
+			return g.send(ctx, state.session, errorEnvelope("room_full", "player seats are full; join as spectator"))
+		}
 		return fmt.Errorf("join room: %w", err)
 	}
 
 	state.room = runtime
 	state.roomID = payload.GetRoomId()
 
-	if err := g.send(ctx, state.session, joinRoomOkEnvelope(payload.GetRoomId(), snapshot.Revision)); err != nil {
+	if err := g.send(ctx, state.session, joinRoomOkEnvelope(payload.GetRoomId(), snapshot.Revision, joinMode, viewScope)); err != nil {
 		return err
 	}
-	if payload.GetLastSeenRevision() != snapshot.Revision {
-		if err := g.send(ctx, state.session, room.SnapshotEnvelope(snapshot)); err != nil {
-			return err
-		}
-		return state.room.RecordSnapshotSent(ctx, state.identity.PlayerID)
+	if err := g.send(ctx, state.session, room.SnapshotEnvelope(snapshot)); err != nil {
+		return err
 	}
-	return nil
+	return state.room.RecordSnapshotSent(ctx, state.identity.PlayerID)
 }
 
 func (g *Gateway) handleGameCommand(ctx context.Context, state *connectionState, payload *ruleshiftv1.GameCommand) error {
@@ -283,7 +293,7 @@ func (g *Gateway) handleSnapshotRequest(ctx context.Context, state *connectionSt
 		return g.send(ctx, state.session, errorEnvelope("not_in_room", "join the requested room before snapshots"))
 	}
 
-	snapshot, err := state.room.Snapshot(ctx)
+	snapshot, err := state.room.SnapshotFor(ctx, state.session)
 	if err != nil {
 		return fmt.Errorf("room snapshot: %w", err)
 	}
@@ -382,6 +392,9 @@ func toRoomGameCommand(payload *ruleshiftv1.GameCommand, playerID string) (room.
 		command.Type = game.CommandResign
 	case *ruleshiftv1.GameCommand_OfferDraw:
 		command.Type = game.CommandOfferDraw
+	case *ruleshiftv1.GameCommand_SetSecret:
+		command.Type = game.CommandSetSecret
+		command.Payload = hiddennumber.SetSecret{Value: typed.SetSecret.GetValue()}
 	default:
 		return room.GameCommand{}, fmt.Errorf("unsupported game command %T", payload.GetCommand())
 	}
@@ -399,11 +412,40 @@ func authFailedEnvelope(reason string) *ruleshiftv1.ServerEnvelope {
 	return &ruleshiftv1.ServerEnvelope{Payload: &ruleshiftv1.ServerEnvelope_AuthFailed{AuthFailed: &ruleshiftv1.AuthFailed{Reason: reason}}}
 }
 
-func joinRoomOkEnvelope(roomID string, revision uint64) *ruleshiftv1.ServerEnvelope {
+func joinRoomOkEnvelope(roomID string, revision uint64, joinMode game.JoinMode, viewScope game.ViewScope) *ruleshiftv1.ServerEnvelope {
 	return &ruleshiftv1.ServerEnvelope{Payload: &ruleshiftv1.ServerEnvelope_JoinRoomOk{JoinRoomOk: &ruleshiftv1.JoinRoomOk{
 		RoomId:          roomID,
 		CurrentRevision: revision,
+		JoinMode:        toProtoJoinMode(joinMode),
+		ViewScope:       toProtoViewScope(viewScope),
 	}}}
+}
+
+func fromProtoJoinMode(mode ruleshiftv1.JoinMode) game.JoinMode {
+	if mode == ruleshiftv1.JoinMode_JOIN_MODE_SPECTATOR {
+		return game.JoinModeSpectator
+	}
+	return game.JoinModePlayer
+}
+
+func toProtoJoinMode(mode game.JoinMode) ruleshiftv1.JoinMode {
+	if mode == game.JoinModeSpectator {
+		return ruleshiftv1.JoinMode_JOIN_MODE_SPECTATOR
+	}
+	return ruleshiftv1.JoinMode_JOIN_MODE_PLAYER
+}
+
+func toProtoViewScope(scope game.ViewScope) ruleshiftv1.ViewScope {
+	switch scope {
+	case game.ViewScopePlayer:
+		return ruleshiftv1.ViewScope_VIEW_SCOPE_PLAYER
+	case game.ViewScopePublic:
+		return ruleshiftv1.ViewScope_VIEW_SCOPE_PUBLIC
+	case game.ViewScopeFull:
+		return ruleshiftv1.ViewScope_VIEW_SCOPE_FULL
+	default:
+		return ruleshiftv1.ViewScope_VIEW_SCOPE_UNSPECIFIED
+	}
 }
 
 func errorEnvelope(code string, message string) *ruleshiftv1.ServerEnvelope {

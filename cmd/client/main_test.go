@@ -54,8 +54,8 @@ func TestRunGetMove(t *testing.T) {
 	if snapshot.Game.StateHash == 0 {
 		t.Fatal("snapshot state hash is zero after move")
 	}
-	if snapshot.Revision != 1 {
-		t.Fatalf("unexpected final revision: got=%d want=1", snapshot.Revision)
+	if snapshot.Revision != 2 {
+		t.Fatalf("unexpected final revision: got=%d want=2", snapshot.Revision)
 	}
 }
 

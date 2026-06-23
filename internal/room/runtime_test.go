@@ -12,9 +12,14 @@ import (
 	"time"
 
 	"github.com/Ruleshift/server/internal/game"
+	"github.com/Ruleshift/server/internal/game/hiddennumber"
 	"github.com/Ruleshift/server/internal/game/xiangqi"
 	ruleshiftv1 "github.com/Ruleshift/server/internal/protocol/generated/go/ruleshiftv1"
 )
+
+func testViewer(playerID string) game.Viewer {
+	return game.Viewer{PlayerID: playerID, JoinMode: game.JoinModePlayer, Scope: game.ViewScopePlayer}
+}
 
 func TestRoomRuntimeBroadcastsSameDeltasToAllJoinedClients(t *testing.T) {
 	runtime, cancel, done := startTestRuntime(t)
@@ -26,14 +31,14 @@ func TestRoomRuntimeBroadcastsSameDeltasToAllJoinedClients(t *testing.T) {
 	ctx, cancelJoin := context.WithTimeout(context.Background(), time.Second)
 	defer cancelJoin()
 
-	snapshot, err := runtime.Join(ctx, player1)
+	snapshot, err := runtime.Join(ctx, player1, testViewer(player1.PlayerID()))
 	if err != nil {
 		t.Fatalf("Join player-1 returned error: %v", err)
 	}
-	if snapshot.Revision != 0 || snapshot.Game.StateHash != 0 {
-		t.Fatalf("initial snapshot = hash %d revision %d, want 0/0", snapshot.Game.StateHash, snapshot.Revision)
+	if snapshot.Revision != 0 || snapshot.Game.ViewHash != 0 {
+		t.Fatalf("initial snapshot = hash %d revision %d, want 0/0", snapshot.Game.ViewHash, snapshot.Revision)
 	}
-	if _, err := runtime.Join(ctx, player2); err != nil {
+	if _, err := runtime.Join(ctx, player2, testViewer(player2.PlayerID())); err != nil {
 		t.Fatalf("Join player-2 returned error: %v", err)
 	}
 
@@ -123,7 +128,7 @@ func TestRoomRuntimeRejectsInvalidCommandWithoutBroadcast(t *testing.T) {
 	ctx, cancelCtx := context.WithTimeout(context.Background(), time.Second)
 	defer cancelCtx()
 
-	if _, err := runtime.Join(ctx, player); err != nil {
+	if _, err := runtime.Join(ctx, player, testViewer(player.PlayerID())); err != nil {
 		t.Fatalf("Join returned error: %v", err)
 	}
 
@@ -155,7 +160,7 @@ func TestRoomRuntimeCompactsSlowConsumerQueueToSnapshot(t *testing.T) {
 	ctx, cancelCtx := context.WithTimeout(context.Background(), time.Second)
 	defer cancelCtx()
 
-	if _, err := runtime.Join(ctx, session); err != nil {
+	if _, err := runtime.Join(ctx, session, testViewer(session.PlayerID())); err != nil {
 		t.Fatalf("Join returned error: %v", err)
 	}
 
@@ -188,6 +193,62 @@ func TestRoomRuntimeCompactsSlowConsumerQueueToSnapshot(t *testing.T) {
 	}
 }
 
+func TestRoomRuntimePersonalizesHiddenCompactionAndNoVisibleDelta(t *testing.T) {
+	runtime, cancel, done := startTestRuntimeWithConfig(t, RuntimeConfig{
+		InputQueueSize: 16, SlowConsumerStrikeLimit: 2, GameModule: hiddennumber.NewModule(),
+	})
+	defer stopTestRuntime(t, cancel, done)
+	ctx, cancelCtx := context.WithTimeout(context.Background(), time.Second)
+	defer cancelCtx()
+	owner := newCollectingSink("owner")
+	opponent := newCollectingSink("opponent")
+	if _, err := runtime.Join(ctx, owner, testViewer("owner")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Join(ctx, opponent, testViewer("opponent")); err != nil {
+		t.Fatal(err)
+	}
+	slow := newBoundedTestSink("slow-watcher", 1)
+	fast := newBoundedTestSink("fast-watcher", 4)
+	publicSlow := game.Viewer{PlayerID: slow.PlayerID(), JoinMode: game.JoinModeSpectator, Scope: game.ViewScopePublic}
+	publicFast := game.Viewer{PlayerID: fast.PlayerID(), JoinMode: game.JoinModeSpectator, Scope: game.ViewScopePublic}
+	if _, err := runtime.Join(ctx, slow, publicSlow); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Join(ctx, fast, publicFast); err != nil {
+		t.Fatal(err)
+	}
+
+	command := func(value int64) GameCommand {
+		return GameCommand{RoomID: "room-1", PlayerID: "owner", Type: game.CommandSetSecret, Payload: hiddennumber.SetSecret{Value: value}}
+	}
+	if _, err := runtime.Submit(ctx, command(10)); err != nil {
+		t.Fatal(err)
+	}
+	second, err := runtime.Submit(ctx, command(20))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.SnapshotCompactions != 1 {
+		t.Fatalf("snapshot compactions=%d want 1", second.SnapshotCompactions)
+	}
+	compacted := slow.read(t).GetStateSnapshot()
+	if compacted == nil || compacted.GetRevision() != 4 {
+		t.Fatalf("compacted snapshot=%v want revision 4", compacted)
+	}
+	if compacted.GetHiddenNumber().GetPlayers()[0].Secret != nil {
+		t.Fatal("public compacted snapshot leaked owner secret")
+	}
+	firstDelta := fast.read(t).GetStateDelta()
+	secondDelta := fast.read(t).GetStateDelta()
+	if firstDelta == nil || firstDelta.GetNoVisibleChange() {
+		t.Fatal("first has_secret change should be visible")
+	}
+	if secondDelta == nil || !secondDelta.GetNoVisibleChange() || secondDelta.GetHiddenNumber() != nil {
+		t.Fatalf("second public delta=%v want no_visible_change without payload", secondDelta)
+	}
+}
+
 func TestRoomRuntimeDisconnectsPersistentSlowConsumer(t *testing.T) {
 	runtime, cancel, done := startTestRuntimeWithConfig(t, RuntimeConfig{
 		InputQueueSize:          8,
@@ -200,7 +261,7 @@ func TestRoomRuntimeDisconnectsPersistentSlowConsumer(t *testing.T) {
 	ctx, cancelCtx := context.WithTimeout(context.Background(), time.Second)
 	defer cancelCtx()
 
-	if _, err := runtime.Join(ctx, session); err != nil {
+	if _, err := runtime.Join(ctx, session, testViewer(session.PlayerID())); err != nil {
 		t.Fatalf("Join returned error: %v", err)
 	}
 
@@ -229,7 +290,7 @@ func TestRoomRuntimeShutdownClosesJoinedSessions(t *testing.T) {
 	ctx, cancelCtx := context.WithTimeout(context.Background(), time.Second)
 	defer cancelCtx()
 
-	if _, err := runtime.Join(ctx, session); err != nil {
+	if _, err := runtime.Join(ctx, session, testViewer(session.PlayerID())); err != nil {
 		t.Fatalf("Join returned error: %v", err)
 	}
 
@@ -261,10 +322,10 @@ func TestRoomRuntimeReplacesSessionAndIgnoresOldCommands(t *testing.T) {
 	ctx, cancelCtx := context.WithTimeout(context.Background(), time.Second)
 	defer cancelCtx()
 
-	if _, err := runtime.Join(ctx, oldSession); err != nil {
+	if _, err := runtime.Join(ctx, oldSession, testViewer(oldSession.PlayerID())); err != nil {
 		t.Fatalf("join old session returned error: %v", err)
 	}
-	if _, err := runtime.Join(ctx, newSession); err != nil {
+	if _, err := runtime.Join(ctx, newSession, testViewer(newSession.PlayerID())); err != nil {
 		t.Fatalf("join new session returned error: %v", err)
 	}
 

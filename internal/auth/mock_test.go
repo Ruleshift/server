@@ -41,6 +41,24 @@ func TestMockProviderRejectsInvalidTicket(t *testing.T) {
 	}
 }
 
+func TestMockProviderGrantsFullViewOnlyToTrustedTicket(t *testing.T) {
+	provider := NewMockProvider()
+	trusted, err := provider.AuthenticateTicket(context.Background(), "mock:trusted:caster")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trusted.PlayerID != "caster" || !trusted.Permissions.Has(PermissionViewFullState) {
+		t.Fatalf("trusted identity=%#v", trusted)
+	}
+	ordinary, err := provider.AuthenticateTicket(context.Background(), "mock:caster")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ordinary.Permissions.Has(PermissionViewFullState) {
+		t.Fatal("ordinary mock ticket received full-view permission")
+	}
+}
+
 func TestPersistingProviderSavesAuthenticatedIdentity(t *testing.T) {
 	store := &recordingIdentityStore{}
 	provider := NewPersistingProvider(NewMockProvider(), store)

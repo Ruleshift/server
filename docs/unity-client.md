@@ -14,7 +14,7 @@ The Unity client skeleton lives under `unity-client/Assets/Scripts/Network`.
 2. Send `AuthRequest` with `mock:player-1` locally.
 3. Receive `AuthOk`.
 4. Send `JoinRoomRequest` with the client's stored `last_seen_revision`.
-5. Receive `JoinRoomOk` and, when that stored revision differs from the server revision, `StateSnapshot`.
+5. Receive `JoinRoomOk` followed by the current recipient-projected `StateSnapshot`.
 6. Send `GameCommand` messages: `DoMove`, `Resign`, or `OfferDraw`.
 7. Apply `StateDelta` in revision order.
 8. Store `lastSeenRevision` for reconnect.

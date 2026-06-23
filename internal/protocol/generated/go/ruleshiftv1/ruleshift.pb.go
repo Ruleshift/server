@@ -21,11 +21,113 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type JoinMode int32
+
+const (
+	JoinMode_JOIN_MODE_UNSPECIFIED JoinMode = 0
+	JoinMode_JOIN_MODE_PLAYER      JoinMode = 1
+	JoinMode_JOIN_MODE_SPECTATOR   JoinMode = 2
+)
+
+// Enum value maps for JoinMode.
+var (
+	JoinMode_name = map[int32]string{
+		0: "JOIN_MODE_UNSPECIFIED",
+		1: "JOIN_MODE_PLAYER",
+		2: "JOIN_MODE_SPECTATOR",
+	}
+	JoinMode_value = map[string]int32{
+		"JOIN_MODE_UNSPECIFIED": 0,
+		"JOIN_MODE_PLAYER":      1,
+		"JOIN_MODE_SPECTATOR":   2,
+	}
+)
+
+func (x JoinMode) Enum() *JoinMode {
+	p := new(JoinMode)
+	*p = x
+	return p
+}
+
+func (x JoinMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (JoinMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_internal_protocol_proto_ruleshift_proto_enumTypes[0].Descriptor()
+}
+
+func (JoinMode) Type() protoreflect.EnumType {
+	return &file_internal_protocol_proto_ruleshift_proto_enumTypes[0]
+}
+
+func (x JoinMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use JoinMode.Descriptor instead.
+func (JoinMode) EnumDescriptor() ([]byte, []int) {
+	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{0}
+}
+
+type ViewScope int32
+
+const (
+	ViewScope_VIEW_SCOPE_UNSPECIFIED ViewScope = 0
+	ViewScope_VIEW_SCOPE_PLAYER      ViewScope = 1
+	ViewScope_VIEW_SCOPE_PUBLIC      ViewScope = 2
+	ViewScope_VIEW_SCOPE_FULL        ViewScope = 3
+)
+
+// Enum value maps for ViewScope.
+var (
+	ViewScope_name = map[int32]string{
+		0: "VIEW_SCOPE_UNSPECIFIED",
+		1: "VIEW_SCOPE_PLAYER",
+		2: "VIEW_SCOPE_PUBLIC",
+		3: "VIEW_SCOPE_FULL",
+	}
+	ViewScope_value = map[string]int32{
+		"VIEW_SCOPE_UNSPECIFIED": 0,
+		"VIEW_SCOPE_PLAYER":      1,
+		"VIEW_SCOPE_PUBLIC":      2,
+		"VIEW_SCOPE_FULL":        3,
+	}
+)
+
+func (x ViewScope) Enum() *ViewScope {
+	p := new(ViewScope)
+	*p = x
+	return p
+}
+
+func (x ViewScope) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ViewScope) Descriptor() protoreflect.EnumDescriptor {
+	return file_internal_protocol_proto_ruleshift_proto_enumTypes[1].Descriptor()
+}
+
+func (ViewScope) Type() protoreflect.EnumType {
+	return &file_internal_protocol_proto_ruleshift_proto_enumTypes[1]
+}
+
+func (x ViewScope) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ViewScope.Descriptor instead.
+func (ViewScope) EnumDescriptor() ([]byte, []int) {
+	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{1}
+}
+
 type GameType int32
 
 const (
-	GameType_GAME_TYPE_UNSPECIFIED GameType = 0
-	GameType_GAME_TYPE_XIANGQI     GameType = 1
+	GameType_GAME_TYPE_UNSPECIFIED   GameType = 0
+	GameType_GAME_TYPE_XIANGQI       GameType = 1
+	GameType_GAME_TYPE_HIDDEN_NUMBER GameType = 2
 )
 
 // Enum value maps for GameType.
@@ -33,10 +135,12 @@ var (
 	GameType_name = map[int32]string{
 		0: "GAME_TYPE_UNSPECIFIED",
 		1: "GAME_TYPE_XIANGQI",
+		2: "GAME_TYPE_HIDDEN_NUMBER",
 	}
 	GameType_value = map[string]int32{
-		"GAME_TYPE_UNSPECIFIED": 0,
-		"GAME_TYPE_XIANGQI":     1,
+		"GAME_TYPE_UNSPECIFIED":   0,
+		"GAME_TYPE_XIANGQI":       1,
+		"GAME_TYPE_HIDDEN_NUMBER": 2,
 	}
 )
 
@@ -51,11 +155,11 @@ func (x GameType) String() string {
 }
 
 func (GameType) Descriptor() protoreflect.EnumDescriptor {
-	return file_internal_protocol_proto_ruleshift_proto_enumTypes[0].Descriptor()
+	return file_internal_protocol_proto_ruleshift_proto_enumTypes[2].Descriptor()
 }
 
 func (GameType) Type() protoreflect.EnumType {
-	return &file_internal_protocol_proto_ruleshift_proto_enumTypes[0]
+	return &file_internal_protocol_proto_ruleshift_proto_enumTypes[2]
 }
 
 func (x GameType) Number() protoreflect.EnumNumber {
@@ -64,7 +168,7 @@ func (x GameType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use GameType.Descriptor instead.
 func (GameType) EnumDescriptor() ([]byte, []int) {
-	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{0}
+	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{2}
 }
 
 type GameCommandType int32
@@ -74,6 +178,7 @@ const (
 	GameCommandType_GAME_COMMAND_TYPE_DO_MOVE     GameCommandType = 1
 	GameCommandType_GAME_COMMAND_TYPE_RESIGN      GameCommandType = 2
 	GameCommandType_GAME_COMMAND_TYPE_OFFER_DRAW  GameCommandType = 3
+	GameCommandType_GAME_COMMAND_TYPE_SET_SECRET  GameCommandType = 4
 )
 
 // Enum value maps for GameCommandType.
@@ -83,12 +188,14 @@ var (
 		1: "GAME_COMMAND_TYPE_DO_MOVE",
 		2: "GAME_COMMAND_TYPE_RESIGN",
 		3: "GAME_COMMAND_TYPE_OFFER_DRAW",
+		4: "GAME_COMMAND_TYPE_SET_SECRET",
 	}
 	GameCommandType_value = map[string]int32{
 		"GAME_COMMAND_TYPE_UNSPECIFIED": 0,
 		"GAME_COMMAND_TYPE_DO_MOVE":     1,
 		"GAME_COMMAND_TYPE_RESIGN":      2,
 		"GAME_COMMAND_TYPE_OFFER_DRAW":  3,
+		"GAME_COMMAND_TYPE_SET_SECRET":  4,
 	}
 )
 
@@ -103,11 +210,11 @@ func (x GameCommandType) String() string {
 }
 
 func (GameCommandType) Descriptor() protoreflect.EnumDescriptor {
-	return file_internal_protocol_proto_ruleshift_proto_enumTypes[1].Descriptor()
+	return file_internal_protocol_proto_ruleshift_proto_enumTypes[3].Descriptor()
 }
 
 func (GameCommandType) Type() protoreflect.EnumType {
-	return &file_internal_protocol_proto_ruleshift_proto_enumTypes[1]
+	return &file_internal_protocol_proto_ruleshift_proto_enumTypes[3]
 }
 
 func (x GameCommandType) Number() protoreflect.EnumNumber {
@@ -116,7 +223,7 @@ func (x GameCommandType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use GameCommandType.Descriptor instead.
 func (GameCommandType) EnumDescriptor() ([]byte, []int) {
-	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{1}
+	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{3}
 }
 
 type XiangqiSide int32
@@ -152,11 +259,11 @@ func (x XiangqiSide) String() string {
 }
 
 func (XiangqiSide) Descriptor() protoreflect.EnumDescriptor {
-	return file_internal_protocol_proto_ruleshift_proto_enumTypes[2].Descriptor()
+	return file_internal_protocol_proto_ruleshift_proto_enumTypes[4].Descriptor()
 }
 
 func (XiangqiSide) Type() protoreflect.EnumType {
-	return &file_internal_protocol_proto_ruleshift_proto_enumTypes[2]
+	return &file_internal_protocol_proto_ruleshift_proto_enumTypes[4]
 }
 
 func (x XiangqiSide) Number() protoreflect.EnumNumber {
@@ -165,7 +272,7 @@ func (x XiangqiSide) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use XiangqiSide.Descriptor instead.
 func (XiangqiSide) EnumDescriptor() ([]byte, []int) {
-	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{2}
+	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{4}
 }
 
 type GameStatus int32
@@ -207,11 +314,11 @@ func (x GameStatus) String() string {
 }
 
 func (GameStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_internal_protocol_proto_ruleshift_proto_enumTypes[3].Descriptor()
+	return file_internal_protocol_proto_ruleshift_proto_enumTypes[5].Descriptor()
 }
 
 func (GameStatus) Type() protoreflect.EnumType {
-	return &file_internal_protocol_proto_ruleshift_proto_enumTypes[3]
+	return &file_internal_protocol_proto_ruleshift_proto_enumTypes[5]
 }
 
 func (x GameStatus) Number() protoreflect.EnumNumber {
@@ -220,7 +327,7 @@ func (x GameStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use GameStatus.Descriptor instead.
 func (GameStatus) EnumDescriptor() ([]byte, []int) {
-	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{3}
+	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{5}
 }
 
 type ClientEnvelope struct {
@@ -691,6 +798,7 @@ type JoinRoomRequest struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	RoomId           string                 `protobuf:"bytes,1,opt,name=room_id,json=roomId,proto3" json:"room_id,omitempty"`
 	LastSeenRevision uint64                 `protobuf:"varint,2,opt,name=last_seen_revision,json=lastSeenRevision,proto3" json:"last_seen_revision,omitempty"`
+	JoinMode         JoinMode               `protobuf:"varint,3,opt,name=join_mode,json=joinMode,proto3,enum=ruleshift.v1.JoinMode" json:"join_mode,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -739,10 +847,19 @@ func (x *JoinRoomRequest) GetLastSeenRevision() uint64 {
 	return 0
 }
 
+func (x *JoinRoomRequest) GetJoinMode() JoinMode {
+	if x != nil {
+		return x.JoinMode
+	}
+	return JoinMode_JOIN_MODE_UNSPECIFIED
+}
+
 type JoinRoomOk struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	RoomId          string                 `protobuf:"bytes,1,opt,name=room_id,json=roomId,proto3" json:"room_id,omitempty"`
 	CurrentRevision uint64                 `protobuf:"varint,2,opt,name=current_revision,json=currentRevision,proto3" json:"current_revision,omitempty"`
+	JoinMode        JoinMode               `protobuf:"varint,3,opt,name=join_mode,json=joinMode,proto3,enum=ruleshift.v1.JoinMode" json:"join_mode,omitempty"`
+	ViewScope       ViewScope              `protobuf:"varint,4,opt,name=view_scope,json=viewScope,proto3,enum=ruleshift.v1.ViewScope" json:"view_scope,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -791,6 +908,20 @@ func (x *JoinRoomOk) GetCurrentRevision() uint64 {
 	return 0
 }
 
+func (x *JoinRoomOk) GetJoinMode() JoinMode {
+	if x != nil {
+		return x.JoinMode
+	}
+	return JoinMode_JOIN_MODE_UNSPECIFIED
+}
+
+func (x *JoinRoomOk) GetViewScope() ViewScope {
+	if x != nil {
+		return x.ViewScope
+	}
+	return ViewScope_VIEW_SCOPE_UNSPECIFIED
+}
+
 type GameCommand struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	RoomId           string                 `protobuf:"bytes,1,opt,name=room_id,json=roomId,proto3" json:"room_id,omitempty"`
@@ -800,6 +931,7 @@ type GameCommand struct {
 	//	*GameCommand_DoMove
 	//	*GameCommand_Resign
 	//	*GameCommand_OfferDraw
+	//	*GameCommand_SetSecret
 	Command       isGameCommand_Command `protobuf_oneof:"command"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -883,6 +1015,15 @@ func (x *GameCommand) GetOfferDraw() *OfferDraw {
 	return nil
 }
 
+func (x *GameCommand) GetSetSecret() *SetSecret {
+	if x != nil {
+		if x, ok := x.Command.(*GameCommand_SetSecret); ok {
+			return x.SetSecret
+		}
+	}
+	return nil
+}
+
 type isGameCommand_Command interface {
 	isGameCommand_Command()
 }
@@ -899,11 +1040,17 @@ type GameCommand_OfferDraw struct {
 	OfferDraw *OfferDraw `protobuf:"bytes,12,opt,name=offer_draw,json=offerDraw,proto3,oneof"`
 }
 
+type GameCommand_SetSecret struct {
+	SetSecret *SetSecret `protobuf:"bytes,13,opt,name=set_secret,json=setSecret,proto3,oneof"`
+}
+
 func (*GameCommand_DoMove) isGameCommand_Command() {}
 
 func (*GameCommand_Resign) isGameCommand_Command() {}
 
 func (*GameCommand_OfferDraw) isGameCommand_Command() {}
+
+func (*GameCommand_SetSecret) isGameCommand_Command() {}
 
 type DoMove struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1037,6 +1184,50 @@ func (*OfferDraw) Descriptor() ([]byte, []int) {
 	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{10}
 }
 
+type SetSecret struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Value         int64                  `protobuf:"varint,1,opt,name=value,proto3" json:"value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetSecret) Reset() {
+	*x = SetSecret{}
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetSecret) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetSecret) ProtoMessage() {}
+
+func (x *SetSecret) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetSecret.ProtoReflect.Descriptor instead.
+func (*SetSecret) Descriptor() ([]byte, []int) {
+	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *SetSecret) GetValue() int64 {
+	if x != nil {
+		return x.Value
+	}
+	return 0
+}
+
 type SquareUpdate struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Square        uint32                 `protobuf:"varint,1,opt,name=square,proto3" json:"square,omitempty"`
@@ -1047,7 +1238,7 @@ type SquareUpdate struct {
 
 func (x *SquareUpdate) Reset() {
 	*x = SquareUpdate{}
-	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[11]
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1059,7 +1250,7 @@ func (x *SquareUpdate) String() string {
 func (*SquareUpdate) ProtoMessage() {}
 
 func (x *SquareUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[11]
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1072,7 +1263,7 @@ func (x *SquareUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SquareUpdate.ProtoReflect.Descriptor instead.
 func (*SquareUpdate) Descriptor() ([]byte, []int) {
-	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{11}
+	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *SquareUpdate) GetSquare() uint32 {
@@ -1094,9 +1285,11 @@ type StateSnapshot struct {
 	RoomId   string                 `protobuf:"bytes,1,opt,name=room_id,json=roomId,proto3" json:"room_id,omitempty"`
 	Revision uint64                 `protobuf:"varint,2,opt,name=revision,proto3" json:"revision,omitempty"`
 	GameType GameType               `protobuf:"varint,3,opt,name=game_type,json=gameType,proto3,enum=ruleshift.v1.GameType" json:"game_type,omitempty"`
+	ViewHash uint64                 `protobuf:"varint,4,opt,name=view_hash,json=viewHash,proto3" json:"view_hash,omitempty"`
 	// Types that are valid to be assigned to State:
 	//
 	//	*StateSnapshot_Xiangqi
+	//	*StateSnapshot_HiddenNumber
 	State         isStateSnapshot_State `protobuf_oneof:"state"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1104,7 +1297,7 @@ type StateSnapshot struct {
 
 func (x *StateSnapshot) Reset() {
 	*x = StateSnapshot{}
-	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[12]
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1116,7 +1309,7 @@ func (x *StateSnapshot) String() string {
 func (*StateSnapshot) ProtoMessage() {}
 
 func (x *StateSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[12]
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1129,7 +1322,7 @@ func (x *StateSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StateSnapshot.ProtoReflect.Descriptor instead.
 func (*StateSnapshot) Descriptor() ([]byte, []int) {
-	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{12}
+	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *StateSnapshot) GetRoomId() string {
@@ -1153,6 +1346,13 @@ func (x *StateSnapshot) GetGameType() GameType {
 	return GameType_GAME_TYPE_UNSPECIFIED
 }
 
+func (x *StateSnapshot) GetViewHash() uint64 {
+	if x != nil {
+		return x.ViewHash
+	}
+	return 0
+}
+
 func (x *StateSnapshot) GetState() isStateSnapshot_State {
 	if x != nil {
 		return x.State
@@ -1169,6 +1369,15 @@ func (x *StateSnapshot) GetXiangqi() *XiangqiSnapshot {
 	return nil
 }
 
+func (x *StateSnapshot) GetHiddenNumber() *HiddenNumberSnapshot {
+	if x != nil {
+		if x, ok := x.State.(*StateSnapshot_HiddenNumber); ok {
+			return x.HiddenNumber
+		}
+	}
+	return nil
+}
+
 type isStateSnapshot_State interface {
 	isStateSnapshot_State()
 }
@@ -1177,7 +1386,13 @@ type StateSnapshot_Xiangqi struct {
 	Xiangqi *XiangqiSnapshot `protobuf:"bytes,10,opt,name=xiangqi,proto3,oneof"`
 }
 
+type StateSnapshot_HiddenNumber struct {
+	HiddenNumber *HiddenNumberSnapshot `protobuf:"bytes,11,opt,name=hidden_number,json=hiddenNumber,proto3,oneof"`
+}
+
 func (*StateSnapshot_Xiangqi) isStateSnapshot_State() {}
+
+func (*StateSnapshot_HiddenNumber) isStateSnapshot_State() {}
 
 type XiangqiSnapshot struct {
 	state                 protoimpl.MessageState `protogen:"open.v1"`
@@ -1196,7 +1411,7 @@ type XiangqiSnapshot struct {
 
 func (x *XiangqiSnapshot) Reset() {
 	*x = XiangqiSnapshot{}
-	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[13]
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1208,7 +1423,7 @@ func (x *XiangqiSnapshot) String() string {
 func (*XiangqiSnapshot) ProtoMessage() {}
 
 func (x *XiangqiSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[13]
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1221,7 +1436,7 @@ func (x *XiangqiSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use XiangqiSnapshot.ProtoReflect.Descriptor instead.
 func (*XiangqiSnapshot) Descriptor() ([]byte, []int) {
-	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{13}
+	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *XiangqiSnapshot) GetFen() string {
@@ -1294,9 +1509,12 @@ type StateDelta struct {
 	NewRevision       uint64                 `protobuf:"varint,3,opt,name=new_revision,json=newRevision,proto3" json:"new_revision,omitempty"`
 	ChangedByPlayerId string                 `protobuf:"bytes,4,opt,name=changed_by_player_id,json=changedByPlayerId,proto3" json:"changed_by_player_id,omitempty"`
 	GameType          GameType               `protobuf:"varint,5,opt,name=game_type,json=gameType,proto3,enum=ruleshift.v1.GameType" json:"game_type,omitempty"`
+	ViewHash          uint64                 `protobuf:"varint,6,opt,name=view_hash,json=viewHash,proto3" json:"view_hash,omitempty"`
+	NoVisibleChange   bool                   `protobuf:"varint,7,opt,name=no_visible_change,json=noVisibleChange,proto3" json:"no_visible_change,omitempty"`
 	// Types that are valid to be assigned to Delta:
 	//
 	//	*StateDelta_Xiangqi
+	//	*StateDelta_HiddenNumber
 	Delta         isStateDelta_Delta `protobuf_oneof:"delta"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1304,7 +1522,7 @@ type StateDelta struct {
 
 func (x *StateDelta) Reset() {
 	*x = StateDelta{}
-	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[14]
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1316,7 +1534,7 @@ func (x *StateDelta) String() string {
 func (*StateDelta) ProtoMessage() {}
 
 func (x *StateDelta) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[14]
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1329,7 +1547,7 @@ func (x *StateDelta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StateDelta.ProtoReflect.Descriptor instead.
 func (*StateDelta) Descriptor() ([]byte, []int) {
-	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{14}
+	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *StateDelta) GetRoomId() string {
@@ -1367,6 +1585,20 @@ func (x *StateDelta) GetGameType() GameType {
 	return GameType_GAME_TYPE_UNSPECIFIED
 }
 
+func (x *StateDelta) GetViewHash() uint64 {
+	if x != nil {
+		return x.ViewHash
+	}
+	return 0
+}
+
+func (x *StateDelta) GetNoVisibleChange() bool {
+	if x != nil {
+		return x.NoVisibleChange
+	}
+	return false
+}
+
 func (x *StateDelta) GetDelta() isStateDelta_Delta {
 	if x != nil {
 		return x.Delta
@@ -1383,6 +1615,15 @@ func (x *StateDelta) GetXiangqi() *XiangqiDelta {
 	return nil
 }
 
+func (x *StateDelta) GetHiddenNumber() *HiddenNumberDelta {
+	if x != nil {
+		if x, ok := x.Delta.(*StateDelta_HiddenNumber); ok {
+			return x.HiddenNumber
+		}
+	}
+	return nil
+}
+
 type isStateDelta_Delta interface {
 	isStateDelta_Delta()
 }
@@ -1391,7 +1632,13 @@ type StateDelta_Xiangqi struct {
 	Xiangqi *XiangqiDelta `protobuf:"bytes,10,opt,name=xiangqi,proto3,oneof"`
 }
 
+type StateDelta_HiddenNumber struct {
+	HiddenNumber *HiddenNumberDelta `protobuf:"bytes,11,opt,name=hidden_number,json=hiddenNumber,proto3,oneof"`
+}
+
 func (*StateDelta_Xiangqi) isStateDelta_Delta() {}
+
+func (*StateDelta_HiddenNumber) isStateDelta_Delta() {}
 
 type XiangqiDelta struct {
 	state                 protoimpl.MessageState `protogen:"open.v1"`
@@ -1411,7 +1658,7 @@ type XiangqiDelta struct {
 
 func (x *XiangqiDelta) Reset() {
 	*x = XiangqiDelta{}
-	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[15]
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1423,7 +1670,7 @@ func (x *XiangqiDelta) String() string {
 func (*XiangqiDelta) ProtoMessage() {}
 
 func (x *XiangqiDelta) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[15]
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1436,7 +1683,7 @@ func (x *XiangqiDelta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use XiangqiDelta.ProtoReflect.Descriptor instead.
 func (*XiangqiDelta) Descriptor() ([]byte, []int) {
-	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{15}
+	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *XiangqiDelta) GetCommandType() GameCommandType {
@@ -1509,6 +1756,178 @@ func (x *XiangqiDelta) GetStateHash() uint64 {
 	return 0
 }
 
+type HiddenNumberPlayerView struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PlayerId      string                 `protobuf:"bytes,1,opt,name=player_id,json=playerId,proto3" json:"player_id,omitempty"`
+	HasSecret     bool                   `protobuf:"varint,2,opt,name=has_secret,json=hasSecret,proto3" json:"has_secret,omitempty"`
+	Secret        *int64                 `protobuf:"varint,3,opt,name=secret,proto3,oneof" json:"secret,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HiddenNumberPlayerView) Reset() {
+	*x = HiddenNumberPlayerView{}
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HiddenNumberPlayerView) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HiddenNumberPlayerView) ProtoMessage() {}
+
+func (x *HiddenNumberPlayerView) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HiddenNumberPlayerView.ProtoReflect.Descriptor instead.
+func (*HiddenNumberPlayerView) Descriptor() ([]byte, []int) {
+	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *HiddenNumberPlayerView) GetPlayerId() string {
+	if x != nil {
+		return x.PlayerId
+	}
+	return ""
+}
+
+func (x *HiddenNumberPlayerView) GetHasSecret() bool {
+	if x != nil {
+		return x.HasSecret
+	}
+	return false
+}
+
+func (x *HiddenNumberPlayerView) GetSecret() int64 {
+	if x != nil && x.Secret != nil {
+		return *x.Secret
+	}
+	return 0
+}
+
+type HiddenNumberSnapshot struct {
+	state         protoimpl.MessageState    `protogen:"open.v1"`
+	Players       []*HiddenNumberPlayerView `protobuf:"bytes,1,rep,name=players,proto3" json:"players,omitempty"`
+	Status        GameStatus                `protobuf:"varint,2,opt,name=status,proto3,enum=ruleshift.v1.GameStatus" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HiddenNumberSnapshot) Reset() {
+	*x = HiddenNumberSnapshot{}
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HiddenNumberSnapshot) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HiddenNumberSnapshot) ProtoMessage() {}
+
+func (x *HiddenNumberSnapshot) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HiddenNumberSnapshot.ProtoReflect.Descriptor instead.
+func (*HiddenNumberSnapshot) Descriptor() ([]byte, []int) {
+	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *HiddenNumberSnapshot) GetPlayers() []*HiddenNumberPlayerView {
+	if x != nil {
+		return x.Players
+	}
+	return nil
+}
+
+func (x *HiddenNumberSnapshot) GetStatus() GameStatus {
+	if x != nil {
+		return x.Status
+	}
+	return GameStatus_GAME_STATUS_UNSPECIFIED
+}
+
+type HiddenNumberDelta struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PlayerId      string                 `protobuf:"bytes,1,opt,name=player_id,json=playerId,proto3" json:"player_id,omitempty"`
+	HasSecret     bool                   `protobuf:"varint,2,opt,name=has_secret,json=hasSecret,proto3" json:"has_secret,omitempty"`
+	Secret        *int64                 `protobuf:"varint,3,opt,name=secret,proto3,oneof" json:"secret,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HiddenNumberDelta) Reset() {
+	*x = HiddenNumberDelta{}
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HiddenNumberDelta) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HiddenNumberDelta) ProtoMessage() {}
+
+func (x *HiddenNumberDelta) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HiddenNumberDelta.ProtoReflect.Descriptor instead.
+func (*HiddenNumberDelta) Descriptor() ([]byte, []int) {
+	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *HiddenNumberDelta) GetPlayerId() string {
+	if x != nil {
+		return x.PlayerId
+	}
+	return ""
+}
+
+func (x *HiddenNumberDelta) GetHasSecret() bool {
+	if x != nil {
+		return x.HasSecret
+	}
+	return false
+}
+
+func (x *HiddenNumberDelta) GetSecret() int64 {
+	if x != nil && x.Secret != nil {
+		return *x.Secret
+	}
+	return 0
+}
+
 type SnapshotRequest struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	RoomId           string                 `protobuf:"bytes,1,opt,name=room_id,json=roomId,proto3" json:"room_id,omitempty"`
@@ -1519,7 +1938,7 @@ type SnapshotRequest struct {
 
 func (x *SnapshotRequest) Reset() {
 	*x = SnapshotRequest{}
-	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[16]
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1531,7 +1950,7 @@ func (x *SnapshotRequest) String() string {
 func (*SnapshotRequest) ProtoMessage() {}
 
 func (x *SnapshotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[16]
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1544,7 +1963,7 @@ func (x *SnapshotRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotRequest.ProtoReflect.Descriptor instead.
 func (*SnapshotRequest) Descriptor() ([]byte, []int) {
-	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{16}
+	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *SnapshotRequest) GetRoomId() string {
@@ -1571,7 +1990,7 @@ type ErrorMessage struct {
 
 func (x *ErrorMessage) Reset() {
 	*x = ErrorMessage{}
-	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[17]
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1583,7 +2002,7 @@ func (x *ErrorMessage) String() string {
 func (*ErrorMessage) ProtoMessage() {}
 
 func (x *ErrorMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[17]
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1596,7 +2015,7 @@ func (x *ErrorMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ErrorMessage.ProtoReflect.Descriptor instead.
 func (*ErrorMessage) Descriptor() ([]byte, []int) {
-	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{17}
+	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ErrorMessage) GetCode() string {
@@ -1622,7 +2041,7 @@ type Ping struct {
 
 func (x *Ping) Reset() {
 	*x = Ping{}
-	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[18]
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1634,7 +2053,7 @@ func (x *Ping) String() string {
 func (*Ping) ProtoMessage() {}
 
 func (x *Ping) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[18]
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1647,7 +2066,7 @@ func (x *Ping) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Ping.ProtoReflect.Descriptor instead.
 func (*Ping) Descriptor() ([]byte, []int) {
-	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{18}
+	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *Ping) GetClientTimeUnixMs() int64 {
@@ -1667,7 +2086,7 @@ type Pong struct {
 
 func (x *Pong) Reset() {
 	*x = Pong{}
-	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[19]
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1679,7 +2098,7 @@ func (x *Pong) String() string {
 func (*Pong) ProtoMessage() {}
 
 func (x *Pong) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[19]
+	mi := &file_internal_protocol_proto_ruleshift_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1692,7 +2111,7 @@ func (x *Pong) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Pong.ProtoReflect.Descriptor instead.
 func (*Pong) Descriptor() ([]byte, []int) {
-	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{19}
+	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *Pong) GetClientTimeUnixMs() int64 {
@@ -1746,14 +2165,18 @@ const file_internal_protocol_proto_ruleshift_proto_rawDesc = "" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\"$\n" +
 	"\n" +
 	"AuthFailed\x12\x16\n" +
-	"\x06reason\x18\x01 \x01(\tR\x06reason\"X\n" +
+	"\x06reason\x18\x01 \x01(\tR\x06reason\"\x8d\x01\n" +
 	"\x0fJoinRoomRequest\x12\x17\n" +
 	"\aroom_id\x18\x01 \x01(\tR\x06roomId\x12,\n" +
-	"\x12last_seen_revision\x18\x02 \x01(\x04R\x10lastSeenRevision\"P\n" +
+	"\x12last_seen_revision\x18\x02 \x01(\x04R\x10lastSeenRevision\x123\n" +
+	"\tjoin_mode\x18\x03 \x01(\x0e2\x16.ruleshift.v1.JoinModeR\bjoinMode\"\xbd\x01\n" +
 	"\n" +
 	"JoinRoomOk\x12\x17\n" +
 	"\aroom_id\x18\x01 \x01(\tR\x06roomId\x12)\n" +
-	"\x10current_revision\x18\x02 \x01(\x04R\x0fcurrentRevision\"\xf9\x01\n" +
+	"\x10current_revision\x18\x02 \x01(\x04R\x0fcurrentRevision\x123\n" +
+	"\tjoin_mode\x18\x03 \x01(\x0e2\x16.ruleshift.v1.JoinModeR\bjoinMode\x126\n" +
+	"\n" +
+	"view_scope\x18\x04 \x01(\x0e2\x17.ruleshift.v1.ViewScopeR\tviewScope\"\xb3\x02\n" +
 	"\vGameCommand\x12\x17\n" +
 	"\aroom_id\x18\x01 \x01(\tR\x06roomId\x12+\n" +
 	"\x11expected_revision\x18\x02 \x01(\x04R\x10expectedRevision\x12/\n" +
@@ -1761,7 +2184,9 @@ const file_internal_protocol_proto_ruleshift_proto_rawDesc = "" +
 	" \x01(\v2\x14.ruleshift.v1.DoMoveH\x00R\x06doMove\x12.\n" +
 	"\x06resign\x18\v \x01(\v2\x14.ruleshift.v1.ResignH\x00R\x06resign\x128\n" +
 	"\n" +
-	"offer_draw\x18\f \x01(\v2\x17.ruleshift.v1.OfferDrawH\x00R\tofferDrawB\t\n" +
+	"offer_draw\x18\f \x01(\v2\x17.ruleshift.v1.OfferDrawH\x00R\tofferDraw\x128\n" +
+	"\n" +
+	"set_secret\x18\r \x01(\v2\x17.ruleshift.v1.SetSecretH\x00R\tsetSecretB\t\n" +
 	"\acommand\"a\n" +
 	"\x06DoMove\x12\x1f\n" +
 	"\vfrom_square\x18\x01 \x01(\rR\n" +
@@ -1769,16 +2194,20 @@ const file_internal_protocol_proto_ruleshift_proto_rawDesc = "" +
 	"\tto_square\x18\x02 \x01(\rR\btoSquare\x12\x19\n" +
 	"\bmove_uci\x18\x03 \x01(\tR\amoveUci\"\b\n" +
 	"\x06Resign\"\v\n" +
-	"\tOfferDraw\"<\n" +
+	"\tOfferDraw\"!\n" +
+	"\tSetSecret\x12\x14\n" +
+	"\x05value\x18\x01 \x01(\x03R\x05value\"<\n" +
 	"\fSquareUpdate\x12\x16\n" +
 	"\x06square\x18\x01 \x01(\rR\x06square\x12\x14\n" +
-	"\x05piece\x18\x02 \x01(\rR\x05piece\"\xbd\x01\n" +
+	"\x05piece\x18\x02 \x01(\rR\x05piece\"\xa5\x02\n" +
 	"\rStateSnapshot\x12\x17\n" +
 	"\aroom_id\x18\x01 \x01(\tR\x06roomId\x12\x1a\n" +
 	"\brevision\x18\x02 \x01(\x04R\brevision\x123\n" +
-	"\tgame_type\x18\x03 \x01(\x0e2\x16.ruleshift.v1.GameTypeR\bgameType\x129\n" +
+	"\tgame_type\x18\x03 \x01(\x0e2\x16.ruleshift.v1.GameTypeR\bgameType\x12\x1b\n" +
+	"\tview_hash\x18\x04 \x01(\x04R\bviewHash\x129\n" +
 	"\axiangqi\x18\n" +
-	" \x01(\v2\x1d.ruleshift.v1.XiangqiSnapshotH\x00R\axiangqiB\a\n" +
+	" \x01(\v2\x1d.ruleshift.v1.XiangqiSnapshotH\x00R\axiangqi\x12I\n" +
+	"\rhidden_number\x18\v \x01(\v2\".ruleshift.v1.HiddenNumberSnapshotH\x00R\fhiddenNumberB\a\n" +
 	"\x05state\"\xfb\x02\n" +
 	"\x0fXiangqiSnapshot\x12\x10\n" +
 	"\x03fen\x18\x01 \x01(\tR\x03fen\x12\x18\n" +
@@ -1791,16 +2220,19 @@ const file_internal_protocol_proto_ruleshift_proto_rawDesc = "" +
 	"\x10winner_player_id\x18\a \x01(\tR\x0ewinnerPlayerId\x128\n" +
 	"\x19draw_offered_by_player_id\x18\b \x01(\tR\x15drawOfferedByPlayerId\x12\x1d\n" +
 	"\n" +
-	"state_hash\x18\t \x01(\x04R\tstateHash\"\x9c\x02\n" +
+	"state_hash\x18\t \x01(\x04R\tstateHash\"\xad\x03\n" +
 	"\n" +
 	"StateDelta\x12\x17\n" +
 	"\aroom_id\x18\x01 \x01(\tR\x06roomId\x12+\n" +
 	"\x11previous_revision\x18\x02 \x01(\x04R\x10previousRevision\x12!\n" +
 	"\fnew_revision\x18\x03 \x01(\x04R\vnewRevision\x12/\n" +
 	"\x14changed_by_player_id\x18\x04 \x01(\tR\x11changedByPlayerId\x123\n" +
-	"\tgame_type\x18\x05 \x01(\x0e2\x16.ruleshift.v1.GameTypeR\bgameType\x126\n" +
+	"\tgame_type\x18\x05 \x01(\x0e2\x16.ruleshift.v1.GameTypeR\bgameType\x12\x1b\n" +
+	"\tview_hash\x18\x06 \x01(\x04R\bviewHash\x12*\n" +
+	"\x11no_visible_change\x18\a \x01(\bR\x0fnoVisibleChange\x126\n" +
 	"\axiangqi\x18\n" +
-	" \x01(\v2\x1a.ruleshift.v1.XiangqiDeltaH\x00R\axiangqiB\a\n" +
+	" \x01(\v2\x1a.ruleshift.v1.XiangqiDeltaH\x00R\axiangqi\x12F\n" +
+	"\rhidden_number\x18\v \x01(\v2\x1f.ruleshift.v1.HiddenNumberDeltaH\x00R\fhiddenNumberB\a\n" +
 	"\x05delta\"\xde\x03\n" +
 	"\fXiangqiDelta\x12@\n" +
 	"\fcommand_type\x18\x01 \x01(\x0e2\x1d.ruleshift.v1.GameCommandTypeR\vcommandType\x12\x19\n" +
@@ -1816,7 +2248,22 @@ const file_internal_protocol_proto_ruleshift_proto_rawDesc = "" +
 	"\x19draw_offered_by_player_id\x18\t \x01(\tR\x15drawOfferedByPlayerId\x12\x1d\n" +
 	"\n" +
 	"state_hash\x18\n" +
-	" \x01(\x04R\tstateHash\"X\n" +
+	" \x01(\x04R\tstateHash\"|\n" +
+	"\x16HiddenNumberPlayerView\x12\x1b\n" +
+	"\tplayer_id\x18\x01 \x01(\tR\bplayerId\x12\x1d\n" +
+	"\n" +
+	"has_secret\x18\x02 \x01(\bR\thasSecret\x12\x1b\n" +
+	"\x06secret\x18\x03 \x01(\x03H\x00R\x06secret\x88\x01\x01B\t\n" +
+	"\a_secret\"\x88\x01\n" +
+	"\x14HiddenNumberSnapshot\x12>\n" +
+	"\aplayers\x18\x01 \x03(\v2$.ruleshift.v1.HiddenNumberPlayerViewR\aplayers\x120\n" +
+	"\x06status\x18\x02 \x01(\x0e2\x18.ruleshift.v1.GameStatusR\x06status\"w\n" +
+	"\x11HiddenNumberDelta\x12\x1b\n" +
+	"\tplayer_id\x18\x01 \x01(\tR\bplayerId\x12\x1d\n" +
+	"\n" +
+	"has_secret\x18\x02 \x01(\bR\thasSecret\x12\x1b\n" +
+	"\x06secret\x18\x03 \x01(\x03H\x00R\x06secret\x88\x01\x01B\t\n" +
+	"\a_secret\"X\n" +
 	"\x0fSnapshotRequest\x12\x17\n" +
 	"\aroom_id\x18\x01 \x01(\tR\x06roomId\x12,\n" +
 	"\x12last_seen_revision\x18\x02 \x01(\x04R\x10lastSeenRevision\"<\n" +
@@ -1827,15 +2274,26 @@ const file_internal_protocol_proto_ruleshift_proto_rawDesc = "" +
 	"\x13client_time_unix_ms\x18\x01 \x01(\x03R\x10clientTimeUnixMs\"d\n" +
 	"\x04Pong\x12-\n" +
 	"\x13client_time_unix_ms\x18\x01 \x01(\x03R\x10clientTimeUnixMs\x12-\n" +
-	"\x13server_time_unix_ms\x18\x02 \x01(\x03R\x10serverTimeUnixMs*<\n" +
+	"\x13server_time_unix_ms\x18\x02 \x01(\x03R\x10serverTimeUnixMs*T\n" +
+	"\bJoinMode\x12\x19\n" +
+	"\x15JOIN_MODE_UNSPECIFIED\x10\x00\x12\x14\n" +
+	"\x10JOIN_MODE_PLAYER\x10\x01\x12\x17\n" +
+	"\x13JOIN_MODE_SPECTATOR\x10\x02*j\n" +
+	"\tViewScope\x12\x1a\n" +
+	"\x16VIEW_SCOPE_UNSPECIFIED\x10\x00\x12\x15\n" +
+	"\x11VIEW_SCOPE_PLAYER\x10\x01\x12\x15\n" +
+	"\x11VIEW_SCOPE_PUBLIC\x10\x02\x12\x13\n" +
+	"\x0fVIEW_SCOPE_FULL\x10\x03*Y\n" +
 	"\bGameType\x12\x19\n" +
 	"\x15GAME_TYPE_UNSPECIFIED\x10\x00\x12\x15\n" +
-	"\x11GAME_TYPE_XIANGQI\x10\x01*\x93\x01\n" +
+	"\x11GAME_TYPE_XIANGQI\x10\x01\x12\x1b\n" +
+	"\x17GAME_TYPE_HIDDEN_NUMBER\x10\x02*\xb5\x01\n" +
 	"\x0fGameCommandType\x12!\n" +
 	"\x1dGAME_COMMAND_TYPE_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19GAME_COMMAND_TYPE_DO_MOVE\x10\x01\x12\x1c\n" +
 	"\x18GAME_COMMAND_TYPE_RESIGN\x10\x02\x12 \n" +
-	"\x1cGAME_COMMAND_TYPE_OFFER_DRAW\x10\x03*Y\n" +
+	"\x1cGAME_COMMAND_TYPE_OFFER_DRAW\x10\x03\x12 \n" +
+	"\x1cGAME_COMMAND_TYPE_SET_SECRET\x10\x04*Y\n" +
 	"\vXiangqiSide\x12\x1c\n" +
 	"\x18XIANGQI_SIDE_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10XIANGQI_SIDE_RED\x10\x01\x12\x16\n" +
@@ -1860,65 +2318,79 @@ func file_internal_protocol_proto_ruleshift_proto_rawDescGZIP() []byte {
 	return file_internal_protocol_proto_ruleshift_proto_rawDescData
 }
 
-var file_internal_protocol_proto_ruleshift_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_internal_protocol_proto_ruleshift_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_internal_protocol_proto_ruleshift_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
+var file_internal_protocol_proto_ruleshift_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_internal_protocol_proto_ruleshift_proto_goTypes = []any{
-	(GameType)(0),           // 0: ruleshift.v1.GameType
-	(GameCommandType)(0),    // 1: ruleshift.v1.GameCommandType
-	(XiangqiSide)(0),        // 2: ruleshift.v1.XiangqiSide
-	(GameStatus)(0),         // 3: ruleshift.v1.GameStatus
-	(*ClientEnvelope)(nil),  // 4: ruleshift.v1.ClientEnvelope
-	(*ServerEnvelope)(nil),  // 5: ruleshift.v1.ServerEnvelope
-	(*AuthRequest)(nil),     // 6: ruleshift.v1.AuthRequest
-	(*AuthOk)(nil),          // 7: ruleshift.v1.AuthOk
-	(*AuthFailed)(nil),      // 8: ruleshift.v1.AuthFailed
-	(*JoinRoomRequest)(nil), // 9: ruleshift.v1.JoinRoomRequest
-	(*JoinRoomOk)(nil),      // 10: ruleshift.v1.JoinRoomOk
-	(*GameCommand)(nil),     // 11: ruleshift.v1.GameCommand
-	(*DoMove)(nil),          // 12: ruleshift.v1.DoMove
-	(*Resign)(nil),          // 13: ruleshift.v1.Resign
-	(*OfferDraw)(nil),       // 14: ruleshift.v1.OfferDraw
-	(*SquareUpdate)(nil),    // 15: ruleshift.v1.SquareUpdate
-	(*StateSnapshot)(nil),   // 16: ruleshift.v1.StateSnapshot
-	(*XiangqiSnapshot)(nil), // 17: ruleshift.v1.XiangqiSnapshot
-	(*StateDelta)(nil),      // 18: ruleshift.v1.StateDelta
-	(*XiangqiDelta)(nil),    // 19: ruleshift.v1.XiangqiDelta
-	(*SnapshotRequest)(nil), // 20: ruleshift.v1.SnapshotRequest
-	(*ErrorMessage)(nil),    // 21: ruleshift.v1.ErrorMessage
-	(*Ping)(nil),            // 22: ruleshift.v1.Ping
-	(*Pong)(nil),            // 23: ruleshift.v1.Pong
+	(JoinMode)(0),                  // 0: ruleshift.v1.JoinMode
+	(ViewScope)(0),                 // 1: ruleshift.v1.ViewScope
+	(GameType)(0),                  // 2: ruleshift.v1.GameType
+	(GameCommandType)(0),           // 3: ruleshift.v1.GameCommandType
+	(XiangqiSide)(0),               // 4: ruleshift.v1.XiangqiSide
+	(GameStatus)(0),                // 5: ruleshift.v1.GameStatus
+	(*ClientEnvelope)(nil),         // 6: ruleshift.v1.ClientEnvelope
+	(*ServerEnvelope)(nil),         // 7: ruleshift.v1.ServerEnvelope
+	(*AuthRequest)(nil),            // 8: ruleshift.v1.AuthRequest
+	(*AuthOk)(nil),                 // 9: ruleshift.v1.AuthOk
+	(*AuthFailed)(nil),             // 10: ruleshift.v1.AuthFailed
+	(*JoinRoomRequest)(nil),        // 11: ruleshift.v1.JoinRoomRequest
+	(*JoinRoomOk)(nil),             // 12: ruleshift.v1.JoinRoomOk
+	(*GameCommand)(nil),            // 13: ruleshift.v1.GameCommand
+	(*DoMove)(nil),                 // 14: ruleshift.v1.DoMove
+	(*Resign)(nil),                 // 15: ruleshift.v1.Resign
+	(*OfferDraw)(nil),              // 16: ruleshift.v1.OfferDraw
+	(*SetSecret)(nil),              // 17: ruleshift.v1.SetSecret
+	(*SquareUpdate)(nil),           // 18: ruleshift.v1.SquareUpdate
+	(*StateSnapshot)(nil),          // 19: ruleshift.v1.StateSnapshot
+	(*XiangqiSnapshot)(nil),        // 20: ruleshift.v1.XiangqiSnapshot
+	(*StateDelta)(nil),             // 21: ruleshift.v1.StateDelta
+	(*XiangqiDelta)(nil),           // 22: ruleshift.v1.XiangqiDelta
+	(*HiddenNumberPlayerView)(nil), // 23: ruleshift.v1.HiddenNumberPlayerView
+	(*HiddenNumberSnapshot)(nil),   // 24: ruleshift.v1.HiddenNumberSnapshot
+	(*HiddenNumberDelta)(nil),      // 25: ruleshift.v1.HiddenNumberDelta
+	(*SnapshotRequest)(nil),        // 26: ruleshift.v1.SnapshotRequest
+	(*ErrorMessage)(nil),           // 27: ruleshift.v1.ErrorMessage
+	(*Ping)(nil),                   // 28: ruleshift.v1.Ping
+	(*Pong)(nil),                   // 29: ruleshift.v1.Pong
 }
 var file_internal_protocol_proto_ruleshift_proto_depIdxs = []int32{
-	6,  // 0: ruleshift.v1.ClientEnvelope.auth_request:type_name -> ruleshift.v1.AuthRequest
-	9,  // 1: ruleshift.v1.ClientEnvelope.join_room:type_name -> ruleshift.v1.JoinRoomRequest
-	11, // 2: ruleshift.v1.ClientEnvelope.game_command:type_name -> ruleshift.v1.GameCommand
-	20, // 3: ruleshift.v1.ClientEnvelope.snapshot_request:type_name -> ruleshift.v1.SnapshotRequest
-	22, // 4: ruleshift.v1.ClientEnvelope.ping:type_name -> ruleshift.v1.Ping
-	7,  // 5: ruleshift.v1.ServerEnvelope.auth_ok:type_name -> ruleshift.v1.AuthOk
-	8,  // 6: ruleshift.v1.ServerEnvelope.auth_failed:type_name -> ruleshift.v1.AuthFailed
-	10, // 7: ruleshift.v1.ServerEnvelope.join_room_ok:type_name -> ruleshift.v1.JoinRoomOk
-	16, // 8: ruleshift.v1.ServerEnvelope.state_snapshot:type_name -> ruleshift.v1.StateSnapshot
-	18, // 9: ruleshift.v1.ServerEnvelope.state_delta:type_name -> ruleshift.v1.StateDelta
-	21, // 10: ruleshift.v1.ServerEnvelope.error:type_name -> ruleshift.v1.ErrorMessage
-	23, // 11: ruleshift.v1.ServerEnvelope.pong:type_name -> ruleshift.v1.Pong
-	12, // 12: ruleshift.v1.GameCommand.do_move:type_name -> ruleshift.v1.DoMove
-	13, // 13: ruleshift.v1.GameCommand.resign:type_name -> ruleshift.v1.Resign
-	14, // 14: ruleshift.v1.GameCommand.offer_draw:type_name -> ruleshift.v1.OfferDraw
-	0,  // 15: ruleshift.v1.StateSnapshot.game_type:type_name -> ruleshift.v1.GameType
-	17, // 16: ruleshift.v1.StateSnapshot.xiangqi:type_name -> ruleshift.v1.XiangqiSnapshot
-	2,  // 17: ruleshift.v1.XiangqiSnapshot.side_to_move:type_name -> ruleshift.v1.XiangqiSide
-	3,  // 18: ruleshift.v1.XiangqiSnapshot.status:type_name -> ruleshift.v1.GameStatus
-	0,  // 19: ruleshift.v1.StateDelta.game_type:type_name -> ruleshift.v1.GameType
-	19, // 20: ruleshift.v1.StateDelta.xiangqi:type_name -> ruleshift.v1.XiangqiDelta
-	1,  // 21: ruleshift.v1.XiangqiDelta.command_type:type_name -> ruleshift.v1.GameCommandType
-	15, // 22: ruleshift.v1.XiangqiDelta.square_updates:type_name -> ruleshift.v1.SquareUpdate
-	2,  // 23: ruleshift.v1.XiangqiDelta.side_to_move:type_name -> ruleshift.v1.XiangqiSide
-	3,  // 24: ruleshift.v1.XiangqiDelta.status:type_name -> ruleshift.v1.GameStatus
-	25, // [25:25] is the sub-list for method output_type
-	25, // [25:25] is the sub-list for method input_type
-	25, // [25:25] is the sub-list for extension type_name
-	25, // [25:25] is the sub-list for extension extendee
-	0,  // [0:25] is the sub-list for field type_name
+	8,  // 0: ruleshift.v1.ClientEnvelope.auth_request:type_name -> ruleshift.v1.AuthRequest
+	11, // 1: ruleshift.v1.ClientEnvelope.join_room:type_name -> ruleshift.v1.JoinRoomRequest
+	13, // 2: ruleshift.v1.ClientEnvelope.game_command:type_name -> ruleshift.v1.GameCommand
+	26, // 3: ruleshift.v1.ClientEnvelope.snapshot_request:type_name -> ruleshift.v1.SnapshotRequest
+	28, // 4: ruleshift.v1.ClientEnvelope.ping:type_name -> ruleshift.v1.Ping
+	9,  // 5: ruleshift.v1.ServerEnvelope.auth_ok:type_name -> ruleshift.v1.AuthOk
+	10, // 6: ruleshift.v1.ServerEnvelope.auth_failed:type_name -> ruleshift.v1.AuthFailed
+	12, // 7: ruleshift.v1.ServerEnvelope.join_room_ok:type_name -> ruleshift.v1.JoinRoomOk
+	19, // 8: ruleshift.v1.ServerEnvelope.state_snapshot:type_name -> ruleshift.v1.StateSnapshot
+	21, // 9: ruleshift.v1.ServerEnvelope.state_delta:type_name -> ruleshift.v1.StateDelta
+	27, // 10: ruleshift.v1.ServerEnvelope.error:type_name -> ruleshift.v1.ErrorMessage
+	29, // 11: ruleshift.v1.ServerEnvelope.pong:type_name -> ruleshift.v1.Pong
+	0,  // 12: ruleshift.v1.JoinRoomRequest.join_mode:type_name -> ruleshift.v1.JoinMode
+	0,  // 13: ruleshift.v1.JoinRoomOk.join_mode:type_name -> ruleshift.v1.JoinMode
+	1,  // 14: ruleshift.v1.JoinRoomOk.view_scope:type_name -> ruleshift.v1.ViewScope
+	14, // 15: ruleshift.v1.GameCommand.do_move:type_name -> ruleshift.v1.DoMove
+	15, // 16: ruleshift.v1.GameCommand.resign:type_name -> ruleshift.v1.Resign
+	16, // 17: ruleshift.v1.GameCommand.offer_draw:type_name -> ruleshift.v1.OfferDraw
+	17, // 18: ruleshift.v1.GameCommand.set_secret:type_name -> ruleshift.v1.SetSecret
+	2,  // 19: ruleshift.v1.StateSnapshot.game_type:type_name -> ruleshift.v1.GameType
+	20, // 20: ruleshift.v1.StateSnapshot.xiangqi:type_name -> ruleshift.v1.XiangqiSnapshot
+	24, // 21: ruleshift.v1.StateSnapshot.hidden_number:type_name -> ruleshift.v1.HiddenNumberSnapshot
+	4,  // 22: ruleshift.v1.XiangqiSnapshot.side_to_move:type_name -> ruleshift.v1.XiangqiSide
+	5,  // 23: ruleshift.v1.XiangqiSnapshot.status:type_name -> ruleshift.v1.GameStatus
+	2,  // 24: ruleshift.v1.StateDelta.game_type:type_name -> ruleshift.v1.GameType
+	22, // 25: ruleshift.v1.StateDelta.xiangqi:type_name -> ruleshift.v1.XiangqiDelta
+	25, // 26: ruleshift.v1.StateDelta.hidden_number:type_name -> ruleshift.v1.HiddenNumberDelta
+	3,  // 27: ruleshift.v1.XiangqiDelta.command_type:type_name -> ruleshift.v1.GameCommandType
+	18, // 28: ruleshift.v1.XiangqiDelta.square_updates:type_name -> ruleshift.v1.SquareUpdate
+	4,  // 29: ruleshift.v1.XiangqiDelta.side_to_move:type_name -> ruleshift.v1.XiangqiSide
+	5,  // 30: ruleshift.v1.XiangqiDelta.status:type_name -> ruleshift.v1.GameStatus
+	23, // 31: ruleshift.v1.HiddenNumberSnapshot.players:type_name -> ruleshift.v1.HiddenNumberPlayerView
+	5,  // 32: ruleshift.v1.HiddenNumberSnapshot.status:type_name -> ruleshift.v1.GameStatus
+	33, // [33:33] is the sub-list for method output_type
+	33, // [33:33] is the sub-list for method input_type
+	33, // [33:33] is the sub-list for extension type_name
+	33, // [33:33] is the sub-list for extension extendee
+	0,  // [0:33] is the sub-list for field type_name
 }
 
 func init() { file_internal_protocol_proto_ruleshift_proto_init() }
@@ -1946,20 +2418,25 @@ func file_internal_protocol_proto_ruleshift_proto_init() {
 		(*GameCommand_DoMove)(nil),
 		(*GameCommand_Resign)(nil),
 		(*GameCommand_OfferDraw)(nil),
+		(*GameCommand_SetSecret)(nil),
 	}
-	file_internal_protocol_proto_ruleshift_proto_msgTypes[12].OneofWrappers = []any{
+	file_internal_protocol_proto_ruleshift_proto_msgTypes[13].OneofWrappers = []any{
 		(*StateSnapshot_Xiangqi)(nil),
+		(*StateSnapshot_HiddenNumber)(nil),
 	}
-	file_internal_protocol_proto_ruleshift_proto_msgTypes[14].OneofWrappers = []any{
+	file_internal_protocol_proto_ruleshift_proto_msgTypes[15].OneofWrappers = []any{
 		(*StateDelta_Xiangqi)(nil),
+		(*StateDelta_HiddenNumber)(nil),
 	}
+	file_internal_protocol_proto_ruleshift_proto_msgTypes[17].OneofWrappers = []any{}
+	file_internal_protocol_proto_ruleshift_proto_msgTypes[19].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_protocol_proto_ruleshift_proto_rawDesc), len(file_internal_protocol_proto_ruleshift_proto_rawDesc)),
-			NumEnums:      4,
-			NumMessages:   20,
+			NumEnums:      6,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

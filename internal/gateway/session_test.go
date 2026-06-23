@@ -79,19 +79,17 @@ func newTestWebSocketSession(t *testing.T, queueSize int) *websocketSession {
 }
 
 func testDeltaEnvelope(revision uint64) *ruleshiftv1.ServerEnvelope {
-	base := game.Delta{
+	base := game.ViewDelta{
 		Type:        game.TypeXiangqi,
 		CommandType: game.CommandDoMove,
-		StateHash:   revision,
+		ViewHash:    revision,
 		Status:      game.StatusActive,
 	}
-	base.CommandPayload = xiangqi.Move{UCI: "a0a1"}
 	base.Payload = xiangqi.Delta{
-		Delta:   base,
 		MoveUCI: "a0a1",
 	}
 
-	return room.DeltaEnvelope(room.StateDelta{
+	return room.DeltaEnvelope(room.ProjectedStateDelta{
 		RoomID:            "room-1",
 		PreviousRevision:  revision - 1,
 		NewRevision:       revision,
@@ -101,17 +99,16 @@ func testDeltaEnvelope(revision uint64) *ruleshiftv1.ServerEnvelope {
 }
 
 func testSnapshotEnvelope() *ruleshiftv1.ServerEnvelope {
-	base := game.Snapshot{
-		Type:      game.TypeXiangqi,
-		StateHash: 7,
-		Status:    game.StatusActive,
+	base := game.ViewSnapshot{
+		Type:     game.TypeXiangqi,
+		ViewHash: 7,
+		Status:   game.StatusActive,
 	}
 	base.Payload = xiangqi.Snapshot{
-		Snapshot: base,
-		FEN:      "test:7",
+		FEN: "test:7",
 	}
 
-	return room.SnapshotEnvelope(room.StateSnapshot{
+	return room.SnapshotEnvelope(room.ProjectedStateSnapshot{
 		RoomID:   "room-1",
 		Revision: 3,
 		Game:     base,

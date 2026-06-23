@@ -11,6 +11,7 @@ import (
 
 	"github.com/Ruleshift/server/internal/auth"
 	"github.com/Ruleshift/server/internal/game"
+	"github.com/Ruleshift/server/internal/game/hiddennumber"
 	"github.com/Ruleshift/server/internal/game/xiangqi"
 	"github.com/Ruleshift/server/internal/protocol"
 	ruleshiftv1 "github.com/Ruleshift/server/internal/protocol/generated/go/ruleshiftv1"
@@ -66,7 +67,7 @@ func TestGatewayAuthJoinAndBroadcastDelta(t *testing.T) {
 	}
 }
 
-func TestGatewayJoinAtCurrentRevisionSkipsSnapshot(t *testing.T) {
+func TestGatewayJoinAtCurrentRevisionStillSendsSnapshot(t *testing.T) {
 	server, _ := newTestGatewayServer(t)
 	defer server.Close()
 
@@ -86,6 +87,9 @@ func TestGatewayJoinAtCurrentRevisionSkipsSnapshot(t *testing.T) {
 	if join.GetCurrentRevision() != 0 {
 		t.Fatalf("join revision = %d, want 0", join.GetCurrentRevision())
 	}
+	if snapshot := client.Read(t).GetStateSnapshot(); snapshot == nil {
+		t.Fatalf("payload = nil, want StateSnapshot")
+	}
 
 	client.Send(t, &ruleshiftv1.ClientEnvelope{
 		ProtocolVersion: protocol.CurrentVersion,
@@ -95,7 +99,7 @@ func TestGatewayJoinAtCurrentRevisionSkipsSnapshot(t *testing.T) {
 		},
 	})
 	if pong := client.Read(t).GetPong(); pong == nil {
-		t.Fatalf("payload = nil, want Pong; a stale queued snapshot would be read first here")
+		t.Fatalf("payload = nil, want Pong")
 	}
 }
 
@@ -214,6 +218,54 @@ func TestGatewayPingPong(t *testing.T) {
 	}
 }
 
+func TestGatewayHiddenNumberScopesCannotBeEscalated(t *testing.T) {
+	server := newHiddenNumberGatewayServer(t)
+	defer server.Close()
+
+	playerA := dialTestWebSocket(t, server.URL)
+	defer playerA.Close()
+	playerB := dialTestWebSocket(t, server.URL)
+	defer playerB.Close()
+	authAndJoinMode(t, playerA, "mock:player-a", "player-a", ruleshiftv1.JoinMode_JOIN_MODE_PLAYER)
+	authAndJoinMode(t, playerB, "mock:player-b", "player-b", ruleshiftv1.JoinMode_JOIN_MODE_PLAYER)
+	if membership := playerA.Read(t).GetStateSnapshot(); membership == nil || membership.GetRevision() != 2 {
+		t.Fatalf("player-a membership update=%v, want revision 2 snapshot", membership)
+	}
+	playerA.Send(t, &ruleshiftv1.ClientEnvelope{
+		ProtocolVersion: protocol.CurrentVersion, ClientSequence: 3,
+		Payload: &ruleshiftv1.ClientEnvelope_GameCommand{GameCommand: &ruleshiftv1.GameCommand{
+			RoomId: "hidden-room", Command: &ruleshiftv1.GameCommand_SetSecret{SetSecret: &ruleshiftv1.SetSecret{Value: 424242}},
+		}},
+	})
+	if delta := readDelta(t, playerA); delta.GetHiddenNumber().Secret == nil {
+		t.Fatal("owner delta does not contain its secret")
+	}
+	if delta := readDelta(t, playerB); delta.GetHiddenNumber().Secret != nil {
+		t.Fatal("opponent delta leaked secret")
+	}
+
+	public := dialTestWebSocket(t, server.URL)
+	defer public.Close()
+	publicJoin, publicSnapshot := authAndJoinMode(t, public, "mock:watcher", "watcher", ruleshiftv1.JoinMode_JOIN_MODE_SPECTATOR)
+	if publicJoin.GetViewScope() != ruleshiftv1.ViewScope_VIEW_SCOPE_PUBLIC {
+		t.Fatalf("public scope=%s", publicJoin.GetViewScope())
+	}
+	if publicSnapshot.GetHiddenNumber().GetPlayers()[0].Secret != nil {
+		t.Fatal("public spectator snapshot leaked secret")
+	}
+
+	trusted := dialTestWebSocket(t, server.URL)
+	defer trusted.Close()
+	trustedJoin, trustedSnapshot := authAndJoinMode(t, trusted, "mock:trusted:caster", "caster", ruleshiftv1.JoinMode_JOIN_MODE_SPECTATOR)
+	if trustedJoin.GetViewScope() != ruleshiftv1.ViewScope_VIEW_SCOPE_FULL {
+		t.Fatalf("trusted scope=%s", trustedJoin.GetViewScope())
+	}
+	secret := trustedSnapshot.GetHiddenNumber().GetPlayers()[0].Secret
+	if secret == nil || *secret != 424242 {
+		t.Fatalf("trusted secret=%v want 424242", secret)
+	}
+}
+
 func newTestGatewayServer(t *testing.T) (*httptest.Server, *Gateway) {
 	t.Helper()
 
@@ -230,6 +282,36 @@ func newTestGatewayServer(t *testing.T) (*httptest.Server, *Gateway) {
 	server := httptest.NewServer(http.HandlerFunc(gateway.HandleWebSocket))
 	t.Cleanup(gateway.Close)
 	return server, gateway
+}
+
+func newHiddenNumberGatewayServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	registry := room.NewRegistry(room.RuntimeConfig{InputQueueSize: 128, GameModule: hiddennumber.NewModule()})
+	handler, err := New(Config{MaxMessageBytes: 64 * 1024, SessionSendQueueSize: 32, AuthTimeout: time.Second}, auth.NewMockProvider(), registry, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(handler.HandleWebSocket))
+	t.Cleanup(handler.Close)
+	return server
+}
+
+func authAndJoinMode(t *testing.T, client *testWebSocketClient, ticket string, playerID string, mode ruleshiftv1.JoinMode) (*ruleshiftv1.JoinRoomOk, *ruleshiftv1.StateSnapshot) {
+	t.Helper()
+	client.Send(t, &ruleshiftv1.ClientEnvelope{ProtocolVersion: protocol.CurrentVersion, ClientSequence: 1, Payload: &ruleshiftv1.ClientEnvelope_AuthRequest{AuthRequest: &ruleshiftv1.AuthRequest{Ticket: ticket}}})
+	if authOK := client.Read(t).GetAuthOk(); authOK == nil || authOK.GetPlayerId() != playerID {
+		t.Fatalf("auth response=%v want player %q", authOK, playerID)
+	}
+	client.Send(t, &ruleshiftv1.ClientEnvelope{ProtocolVersion: protocol.CurrentVersion, ClientSequence: 2, Payload: &ruleshiftv1.ClientEnvelope_JoinRoom{JoinRoom: &ruleshiftv1.JoinRoomRequest{RoomId: "hidden-room", JoinMode: mode}}})
+	join := client.Read(t).GetJoinRoomOk()
+	if join == nil {
+		t.Fatal("missing JoinRoomOk")
+	}
+	snapshot := client.Read(t).GetStateSnapshot()
+	if snapshot == nil {
+		t.Fatal("missing join snapshot")
+	}
+	return join, snapshot
 }
 
 func authAndJoin(t *testing.T, client *testWebSocketClient, playerID string, roomID string) {
@@ -251,6 +333,9 @@ func authAndJoin(t *testing.T, client *testWebSocketClient, playerID string, roo
 	}
 	if join.GetRoomId() != roomID {
 		t.Fatalf("join room = %q, want %q", join.GetRoomId(), roomID)
+	}
+	if snapshot := client.Read(t).GetStateSnapshot(); snapshot == nil {
+		t.Fatalf("join snapshot payload = nil, want StateSnapshot")
 	}
 }
 
@@ -399,8 +484,20 @@ func (gatewayTestModule) NewState(time.Time) (any, error) {
 	return &gatewayTestState{}, nil
 }
 
-func (gatewayTestModule) PlayerJoined(state any, _ string) (any, error) {
-	return state, nil
+func (gatewayTestModule) PlayerJoined(state any, _ string) (any, bool, error) {
+	return state, false, nil
+}
+
+func (m gatewayTestModule) ProjectSnapshot(state any, _ game.Viewer) (game.ViewSnapshot, error) {
+	snapshot, err := m.Snapshot(state)
+	if err != nil {
+		return game.ViewSnapshot{}, err
+	}
+	return game.ViewSnapshot{Type: snapshot.Type, Status: snapshot.Status, ViewHash: snapshot.StateHash, Payload: snapshot.Payload}, nil
+}
+
+func (gatewayTestModule) ProjectDelta(_ any, _ any, delta game.Delta, _ game.Viewer) (game.ViewDelta, error) {
+	return game.ViewDelta{Type: delta.Type, CommandType: delta.CommandType, Status: delta.Status, ViewHash: delta.StateHash, Payload: delta.Payload}, nil
 }
 
 func (gatewayTestModule) Snapshot(state any) (game.Snapshot, error) {

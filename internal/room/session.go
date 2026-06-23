@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/Ruleshift/server/internal/game"
+	"github.com/Ruleshift/server/internal/game/hiddennumber"
 	"github.com/Ruleshift/server/internal/game/xiangqi"
 	ruleshiftv1 "github.com/Ruleshift/server/internal/protocol/generated/go/ruleshiftv1"
 )
@@ -28,34 +29,45 @@ type PlayerSink interface {
 	Close(reason string)
 }
 
-func SnapshotEnvelope(snapshot StateSnapshot) *ruleshiftv1.ServerEnvelope {
+func SnapshotEnvelope(snapshot ProjectedStateSnapshot) *ruleshiftv1.ServerEnvelope {
 	state := &ruleshiftv1.StateSnapshot{
 		RoomId:   snapshot.RoomID,
 		Revision: snapshot.Revision,
 		GameType: toProtoGameType(snapshot.Game.Type),
+		ViewHash: snapshot.Game.ViewHash,
 	}
-	if snapshot.Game.Type == game.TypeXiangqi {
+	switch snapshot.Game.Type {
+	case game.TypeXiangqi:
 		state.State = &ruleshiftv1.StateSnapshot_Xiangqi{Xiangqi: toProtoXiangqiSnapshot(snapshot.Game)}
+	case game.TypeHiddenNumber:
+		state.State = &ruleshiftv1.StateSnapshot_HiddenNumber{HiddenNumber: toProtoHiddenNumberSnapshot(snapshot.Game)}
 	}
 	return &ruleshiftv1.ServerEnvelope{Payload: &ruleshiftv1.ServerEnvelope_StateSnapshot{StateSnapshot: state}}
 }
 
-func DeltaEnvelope(delta StateDelta) *ruleshiftv1.ServerEnvelope {
+func DeltaEnvelope(delta ProjectedStateDelta) *ruleshiftv1.ServerEnvelope {
 	stateDelta := &ruleshiftv1.StateDelta{
 		RoomId:            delta.RoomID,
 		PreviousRevision:  delta.PreviousRevision,
 		NewRevision:       delta.NewRevision,
 		ChangedByPlayerId: delta.ChangedByPlayerID,
 		GameType:          toProtoGameType(delta.Game.Type),
+		ViewHash:          delta.Game.ViewHash,
+		NoVisibleChange:   delta.Game.NoVisibleChange,
 	}
-	if delta.Game.Type == game.TypeXiangqi {
+	switch delta.Game.Type {
+	case game.TypeXiangqi:
 		stateDelta.Delta = &ruleshiftv1.StateDelta_Xiangqi{Xiangqi: toProtoXiangqiDelta(delta.Game)}
+	case game.TypeHiddenNumber:
+		if !delta.Game.NoVisibleChange {
+			stateDelta.Delta = &ruleshiftv1.StateDelta_HiddenNumber{HiddenNumber: toProtoHiddenNumberDelta(delta.Game)}
+		}
 	}
 	return &ruleshiftv1.ServerEnvelope{Payload: &ruleshiftv1.ServerEnvelope_StateDelta{StateDelta: stateDelta}}
 }
 
-func toProtoXiangqiSnapshot(snapshot game.Snapshot) *ruleshiftv1.XiangqiSnapshot {
-	payload, _ := xiangqi.SnapshotPayload(snapshot)
+func toProtoXiangqiSnapshot(snapshot game.ViewSnapshot) *ruleshiftv1.XiangqiSnapshot {
+	payload, _ := xiangqiViewSnapshotPayload(snapshot)
 	return &ruleshiftv1.XiangqiSnapshot{
 		Fen:                   payload.FEN,
 		Board:                 payload.Board,
@@ -65,12 +77,12 @@ func toProtoXiangqiSnapshot(snapshot game.Snapshot) *ruleshiftv1.XiangqiSnapshot
 		BlackPlayerId:         payload.BlackPlayerID,
 		WinnerPlayerId:        payload.WinnerPlayerID,
 		DrawOfferedByPlayerId: payload.DrawOfferedByPlayerID,
-		StateHash:             snapshot.StateHash,
+		StateHash:             snapshot.ViewHash,
 	}
 }
 
-func toProtoXiangqiDelta(delta game.Delta) *ruleshiftv1.XiangqiDelta {
-	payload, _ := xiangqi.DeltaPayload(delta)
+func toProtoXiangqiDelta(delta game.ViewDelta) *ruleshiftv1.XiangqiDelta {
+	payload, _ := xiangqiViewDeltaPayload(delta)
 	updates := make([]*ruleshiftv1.SquareUpdate, 0, len(payload.SquareUpdates))
 	for _, update := range payload.SquareUpdates {
 		updates = append(updates, &ruleshiftv1.SquareUpdate{
@@ -89,14 +101,64 @@ func toProtoXiangqiDelta(delta game.Delta) *ruleshiftv1.XiangqiDelta {
 		Status:                toProtoStatus(delta.Status),
 		WinnerPlayerId:        payload.WinnerPlayerID,
 		DrawOfferedByPlayerId: payload.DrawOfferedByPlayerID,
-		StateHash:             delta.StateHash,
+		StateHash:             delta.ViewHash,
 	}
+}
+
+func xiangqiViewSnapshotPayload(snapshot game.ViewSnapshot) (xiangqi.Snapshot, bool) {
+	switch payload := snapshot.Payload.(type) {
+	case xiangqi.Snapshot:
+		return payload, true
+	case *xiangqi.Snapshot:
+		if payload != nil {
+			return *payload, true
+		}
+	}
+	return xiangqi.Snapshot{}, false
+}
+
+func xiangqiViewDeltaPayload(delta game.ViewDelta) (xiangqi.Delta, bool) {
+	switch payload := delta.Payload.(type) {
+	case xiangqi.Delta:
+		return payload, true
+	case *xiangqi.Delta:
+		if payload != nil {
+			return *payload, true
+		}
+	}
+	return xiangqi.Delta{}, false
+}
+
+func toProtoHiddenNumberSnapshot(snapshot game.ViewSnapshot) *ruleshiftv1.HiddenNumberSnapshot {
+	payload, _ := snapshot.Payload.(hiddennumber.SnapshotView)
+	players := make([]*ruleshiftv1.HiddenNumberPlayerView, 0, len(payload.Players))
+	for _, player := range payload.Players {
+		view := &ruleshiftv1.HiddenNumberPlayerView{PlayerId: player.PlayerID, HasSecret: player.HasSecret}
+		if player.Secret != nil {
+			secret := *player.Secret
+			view.Secret = &secret
+		}
+		players = append(players, view)
+	}
+	return &ruleshiftv1.HiddenNumberSnapshot{Players: players, Status: toProtoStatus(snapshot.Status)}
+}
+
+func toProtoHiddenNumberDelta(delta game.ViewDelta) *ruleshiftv1.HiddenNumberDelta {
+	payload, _ := delta.Payload.(hiddennumber.DeltaView)
+	view := &ruleshiftv1.HiddenNumberDelta{PlayerId: payload.PlayerID, HasSecret: payload.HasSecret}
+	if payload.Secret != nil {
+		secret := *payload.Secret
+		view.Secret = &secret
+	}
+	return view
 }
 
 func toProtoGameType(gameType game.Type) ruleshiftv1.GameType {
 	switch gameType {
 	case game.TypeXiangqi:
 		return ruleshiftv1.GameType_GAME_TYPE_XIANGQI
+	case game.TypeHiddenNumber:
+		return ruleshiftv1.GameType_GAME_TYPE_HIDDEN_NUMBER
 	default:
 		return ruleshiftv1.GameType_GAME_TYPE_UNSPECIFIED
 	}
@@ -110,6 +172,8 @@ func toProtoCommandType(commandType game.CommandType) ruleshiftv1.GameCommandTyp
 		return ruleshiftv1.GameCommandType_GAME_COMMAND_TYPE_RESIGN
 	case game.CommandOfferDraw:
 		return ruleshiftv1.GameCommandType_GAME_COMMAND_TYPE_OFFER_DRAW
+	case game.CommandSetSecret:
+		return ruleshiftv1.GameCommandType_GAME_COMMAND_TYPE_SET_SECRET
 	default:
 		return ruleshiftv1.GameCommandType_GAME_COMMAND_TYPE_UNSPECIFIED
 	}

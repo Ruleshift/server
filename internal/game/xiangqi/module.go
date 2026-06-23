@@ -160,25 +160,27 @@ func (Module) NewState(now time.Time) (any, error) {
 	}, nil
 }
 
-func (Module) PlayerJoined(raw any, playerID string) (any, error) {
+func (Module) PlayerJoined(raw any, playerID string) (any, bool, error) {
 	state, err := stateFrom(raw)
 	if err != nil {
-		return raw, err
+		return raw, false, err
 	}
 	if playerID == "" {
-		return raw, fmt.Errorf("player id must not be empty")
+		return raw, false, fmt.Errorf("player id must not be empty")
 	}
 	state = state.clone()
 
 	switch {
 	case state.redPlayerID == playerID || state.blackPlayerID == playerID:
-		return state, nil
+		return state, false, nil
 	case state.redPlayerID == "":
 		state.redPlayerID = playerID
 	case state.blackPlayerID == "":
 		state.blackPlayerID = playerID
+	default:
+		return raw, false, game.ErrRoomFull
 	}
-	return state, nil
+	return state, true, nil
 }
 
 func (Module) Snapshot(raw any) (game.Snapshot, error) {
@@ -187,6 +189,32 @@ func (Module) Snapshot(raw any) (game.Snapshot, error) {
 		return game.Snapshot{}, err
 	}
 	return state.snapshot(), nil
+}
+
+func (Module) ProjectSnapshot(raw any, _ game.Viewer) (game.ViewSnapshot, error) {
+	snapshot, err := (Module{}).Snapshot(raw)
+	if err != nil {
+		return game.ViewSnapshot{}, err
+	}
+	return game.ViewSnapshot{
+		Type:     snapshot.Type,
+		Status:   snapshot.Status,
+		ViewHash: snapshot.StateHash,
+		Payload:  snapshot.Payload,
+	}, nil
+}
+
+func (Module) ProjectDelta(_ any, _ any, delta game.Delta, _ game.Viewer) (game.ViewDelta, error) {
+	if delta.Type != game.TypeXiangqi {
+		return game.ViewDelta{}, game.ErrUnsupportedState
+	}
+	return game.ViewDelta{
+		Type:        delta.Type,
+		CommandType: delta.CommandType,
+		Status:      delta.Status,
+		ViewHash:    delta.StateHash,
+		Payload:     delta.Payload,
+	}, nil
 }
 
 func (Module) Apply(raw any, command game.Command) (any, game.Delta, error) {

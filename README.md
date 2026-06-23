@@ -37,10 +37,12 @@ Implemented in this iteration:
 - HMAC-signed connect tokens with assignment, match, server, player, and expiry claims.
 - Authoritative room state with pluggable game state, monotonic `uint64` revision, game command apply logic, snapshots, deltas, and registry.
 - Xiangqi module using the Go engine for legal move generation and `DoMove`, with first/second joined players seated as red/black.
-- Actor-like `RoomRuntime` owns state, accepts commands through a bounded queue, registers room-local delta subscribers, and broadcasts the same delta to joined clients.
+- Actor-like `RoomRuntime` owns state, accepts commands through a bounded queue, registers room-local subscribers, and sends a projected delta for each recipient.
+- Mandatory per-recipient projections keep canonical state and hashes server-side while delivering player, public-spectator, or trusted full views with a shared revision stream.
+- Hidden Number demo module and standalone gateway/client commands exercise private snapshots, private deltas, `view_hash`, and `no_visible_change`.
 - Gateway-owned websocket sessions implement `room.PlayerSink` with bounded outbound queues, non-blocking send, snapshot compaction for lagging clients, repeated slow-consumer disconnects, and graceful shutdown close.
 - WebSocket gateway on `/ws` using Gorilla WebSocket with binary protobuf envelopes, mock auth, join room, snapshots, `DoMove`/`Resign`/`OfferDraw` commands, delta broadcast, app-level ping/pong, and basic client sequence checks.
-- Reconnect/resume for rooms: `JoinRoomRequest.last_seen_revision` is compared with the authoritative room revision, stale clients receive a `StateSnapshot`, and reconnecting with the same authenticated `player_id` replaces the old session.
+- Reconnect/resume for rooms always returns a recipient-projected `StateSnapshot`; reconnecting with the same authenticated `player_id` replaces the old session.
 - Append-only room event log with sequence-numbered `RoomEvent` records, `InMemoryEventStore`, and replay that restores game state by reapplying module commands.
 - PostgreSQL control database for SaaS developers, module registrations, users, and provider identities.
 - Automatically provisioned database per developer/module, with immutable module-owned migrations, durable room/member projections, room events, and restart recovery.
@@ -74,6 +76,17 @@ go run ./cmd/gateway
 For PostgreSQL-backed local startup, use `docker compose up --build`. Game developers then use `http://localhost:8080` through the Go or Unity SDK. See [docs/developer-api.md](docs/developer-api.md).
 
 The gateway defaults to `:8080`.
+
+Hidden-information demo (run the gateway first, then any combination of players and spectators):
+
+```powershell
+go run ./cmd/hiddennumber-gateway
+go run ./cmd/hiddennumber-client -ticket mock:player-1 -set-secret 42
+go run ./cmd/hiddennumber-client -ticket mock:watcher -spectator
+go run ./cmd/hiddennumber-client -ticket mock:trusted:caster -spectator
+```
+
+Only the trusted spectator receives both private values. The ordinary spectator receives the public projection.
 
 ```powershell
 $env:RULESHIFT_ADDR=":9090"

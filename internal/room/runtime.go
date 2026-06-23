@@ -26,8 +26,10 @@ type RuntimeCommand struct {
 	Command      GameCommand
 	CommandSink  PlayerSink
 	SnapshotOnly bool
+	SnapshotSink PlayerSink
 	SnapshotSent *snapshotSentRecord
 	JoinSink     PlayerSink
+	JoinViewer   game.Viewer
 	LeaveSink    PlayerSink
 	LeaveReason  string
 	Reply        chan<- CommandResult
@@ -39,12 +41,18 @@ type snapshotSentRecord struct {
 
 type CommandResult struct {
 	Snapshot                  StateSnapshot
+	ProjectedSnapshot         ProjectedStateSnapshot
 	Delta                     StateDelta
 	BroadcastCount            int
 	SnapshotCompactions       int
 	DisconnectedSlowConsumers int
 	BroadcastFailures         []BroadcastFailure
 	Err                       error
+}
+
+type roomSubscriber struct {
+	sink   PlayerSink
+	viewer game.Viewer
 }
 
 type BroadcastFailure struct {
@@ -58,7 +66,7 @@ type RoomRuntime struct {
 	done        chan struct{}
 	closeOnce   sync.Once
 	cfg         RuntimeConfig
-	subscribers map[string]PlayerSink
+	subscribers map[string]roomSubscriber
 	slowStrikes map[string]int
 	eventStore  EventStore
 	gameModule  game.Module
@@ -121,7 +129,7 @@ func newRuntime(state RoomState, cfg RuntimeConfig, appendCreated bool) (*RoomRu
 		input:       make(chan RuntimeCommand, cfg.InputQueueSize),
 		done:        make(chan struct{}),
 		cfg:         cfg,
-		subscribers: make(map[string]PlayerSink),
+		subscribers: make(map[string]roomSubscriber),
 		slowStrikes: make(map[string]int),
 		eventStore:  cfg.EventStore,
 		gameModule:  cfg.GameModule,
@@ -200,6 +208,32 @@ func (r *RoomRuntime) Snapshot(ctx context.Context) (StateSnapshot, error) {
 	}
 }
 
+func (r *RoomRuntime) SnapshotFor(ctx context.Context, sink PlayerSink) (ProjectedStateSnapshot, error) {
+	if sink == nil {
+		return ProjectedStateSnapshot{}, ErrNilPlayerSink
+	}
+	if r.isClosed() {
+		return ProjectedStateSnapshot{}, ErrRuntimeClosed
+	}
+	reply := make(chan CommandResult, 1)
+	request := RuntimeCommand{SnapshotSink: sink, Reply: reply}
+	select {
+	case r.input <- request:
+	case <-r.done:
+		return ProjectedStateSnapshot{}, ErrRuntimeClosed
+	case <-ctx.Done():
+		return ProjectedStateSnapshot{}, fmt.Errorf("submit projected snapshot request: %w", ctx.Err())
+	}
+	select {
+	case result := <-reply:
+		return result.ProjectedSnapshot, result.Err
+	case <-r.done:
+		return ProjectedStateSnapshot{}, ErrRuntimeClosed
+	case <-ctx.Done():
+		return ProjectedStateSnapshot{}, fmt.Errorf("wait projected snapshot result: %w", ctx.Err())
+	}
+}
+
 func (r *RoomRuntime) RecordSnapshotSent(ctx context.Context, playerID string) error {
 	if r.isClosed() {
 		return ErrRuntimeClosed
@@ -226,32 +260,32 @@ func (r *RoomRuntime) RecordSnapshotSent(ctx context.Context, playerID string) e
 	}
 }
 
-func (r *RoomRuntime) Join(ctx context.Context, sink PlayerSink) (StateSnapshot, error) {
+func (r *RoomRuntime) Join(ctx context.Context, sink PlayerSink, viewer game.Viewer) (ProjectedStateSnapshot, error) {
 	if sink == nil {
-		return StateSnapshot{}, ErrNilPlayerSink
+		return ProjectedStateSnapshot{}, ErrNilPlayerSink
 	}
 	if r.isClosed() {
-		return StateSnapshot{}, ErrRuntimeClosed
+		return ProjectedStateSnapshot{}, ErrRuntimeClosed
 	}
 
 	reply := make(chan CommandResult, 1)
-	request := RuntimeCommand{JoinSink: sink, Reply: reply}
+	request := RuntimeCommand{JoinSink: sink, JoinViewer: viewer, Reply: reply}
 
 	select {
 	case r.input <- request:
 	case <-r.done:
-		return StateSnapshot{}, ErrRuntimeClosed
+		return ProjectedStateSnapshot{}, ErrRuntimeClosed
 	case <-ctx.Done():
-		return StateSnapshot{}, fmt.Errorf("submit room join request: %w", ctx.Err())
+		return ProjectedStateSnapshot{}, fmt.Errorf("submit room join request: %w", ctx.Err())
 	}
 
 	select {
 	case result := <-reply:
-		return result.Snapshot, result.Err
+		return result.ProjectedSnapshot, result.Err
 	case <-r.done:
-		return StateSnapshot{}, ErrRuntimeClosed
+		return ProjectedStateSnapshot{}, ErrRuntimeClosed
 	case <-ctx.Done():
-		return StateSnapshot{}, fmt.Errorf("wait room join result: %w", ctx.Err())
+		return ProjectedStateSnapshot{}, fmt.Errorf("wait room join result: %w", ctx.Err())
 	}
 }
 
@@ -298,6 +332,11 @@ func (r *RoomRuntime) Run(ctx context.Context) error {
 				request.Reply <- CommandResult{Snapshot: snapshot, Err: err}
 				continue
 			}
+			if request.SnapshotSink != nil {
+				projected, err := r.snapshotFor(request.SnapshotSink)
+				request.Reply <- CommandResult{ProjectedSnapshot: projected, Err: err}
+				continue
+			}
 			if request.SnapshotSent != nil {
 				err := r.recordSnapshotSent(request.SnapshotSent.PlayerID)
 				snapshot, snapshotErr := r.snapshot()
@@ -308,12 +347,8 @@ func (r *RoomRuntime) Run(ctx context.Context) error {
 				continue
 			}
 			if request.JoinSink != nil {
-				err := r.join(request.JoinSink)
-				snapshot, snapshotErr := r.snapshot()
-				if err == nil {
-					err = snapshotErr
-				}
-				request.Reply <- CommandResult{Snapshot: snapshot, Err: err}
+				projected, err := r.join(request.JoinSink, request.JoinViewer)
+				request.Reply <- CommandResult{ProjectedSnapshot: projected, Err: err}
 				continue
 			}
 			if request.LeaveSink != nil {
@@ -335,8 +370,20 @@ func (r *RoomRuntime) Run(ctx context.Context) error {
 				continue
 			}
 
-			next, delta, err := ApplyGameCommand(r.gameModule, r.state, request.Command, r.clock())
+			before := r.state
+			next, delta, err := ApplyGameCommand(r.gameModule, before, request.Command, r.clock())
 			outcome := broadcastOutcome{}
+			projected := make(map[string]ProjectedStateDelta, len(r.subscribers))
+			if err == nil {
+				for playerID, subscriber := range r.subscribers {
+					viewDelta, projectErr := ProjectDelta(r.gameModule, before, next, delta, subscriber.viewer)
+					if projectErr != nil {
+						err = fmt.Errorf("project delta for player %q: %w", playerID, projectErr)
+						break
+					}
+					projected[playerID] = viewDelta
+				}
+			}
 			if err == nil {
 				event, eventErr := NewGameCommandEvent(delta)
 				if eventErr != nil {
@@ -345,7 +392,7 @@ func (r *RoomRuntime) Run(ctx context.Context) error {
 					err = eventErr
 				} else {
 					r.state = next
-					outcome = r.broadcast(delta)
+					outcome = r.broadcast(projected)
 				}
 			}
 			snapshot, snapshotErr := r.snapshot()
@@ -369,35 +416,70 @@ func (r *RoomRuntime) QueueDepth() int {
 	return len(r.input)
 }
 
-func (r *RoomRuntime) join(sink PlayerSink) error {
+func (r *RoomRuntime) join(sink PlayerSink, viewer game.Viewer) (ProjectedStateSnapshot, error) {
 	playerID := sink.PlayerID()
 	if playerID == "" {
-		return ErrEmptyPlayerID
+		return ProjectedStateSnapshot{}, ErrEmptyPlayerID
 	}
 	if sink.SessionID() == 0 {
-		return ErrStalePlayerSession
+		return ProjectedStateSnapshot{}, ErrStalePlayerSession
+	}
+	if viewer.PlayerID != playerID {
+		return ProjectedStateSnapshot{}, ErrStalePlayerSession
 	}
 
-	if previous := r.subscribers[playerID]; previous != nil && previous.SessionID() != sink.SessionID() {
-		previous.Close(CloseReasonReplaced)
-		if err := r.recordPlayerDisconnected(previous.PlayerID(), CloseReasonReplaced); err != nil {
-			return err
+	if previous, ok := r.subscribers[playerID]; ok && previous.sink.SessionID() != sink.SessionID() {
+		previous.sink.Close(CloseReasonReplaced)
+		if err := r.recordPlayerDisconnected(previous.sink.PlayerID(), CloseReasonReplaced); err != nil {
+			return ProjectedStateSnapshot{}, err
 		}
 	}
-	gameState, err := r.gameModule.PlayerJoined(r.state.GameState, playerID)
-	if err != nil {
-		return fmt.Errorf("game player joined: %w", err)
-	}
+
 	nextState := r.state
-	nextState.GameState = gameState
-	nextState.UpdatedAt = r.clock()
-	if err := r.appendEvent(NewPlayerJoinedEvent(nextState, playerID, nextState.UpdatedAt)); err != nil {
-		return err
+	changed := false
+	if viewer.JoinMode == game.JoinModePlayer {
+		gameState, joined, err := r.gameModule.PlayerJoined(r.state.GameState, playerID)
+		if err != nil {
+			return ProjectedStateSnapshot{}, fmt.Errorf("game player joined: %w", err)
+		}
+		nextState.GameState = gameState
+		changed = joined
+		if changed {
+			nextState.Revision++
+			nextState.UpdatedAt = r.clock()
+		}
 	}
-	r.state = nextState
-	r.subscribers[playerID] = sink
+	joiningSnapshot, err := BuildProjectedSnapshot(r.gameModule, nextState, viewer)
+	if err != nil {
+		return ProjectedStateSnapshot{}, fmt.Errorf("project join snapshot: %w", err)
+	}
+	existingSnapshots := make(map[string]ProjectedStateSnapshot, len(r.subscribers))
+	if changed {
+		for existingID, existing := range r.subscribers {
+			projected, projectErr := BuildProjectedSnapshot(r.gameModule, nextState, existing.viewer)
+			if projectErr != nil {
+				return ProjectedStateSnapshot{}, fmt.Errorf("project join snapshot for player %q: %w", existingID, projectErr)
+			}
+			existingSnapshots[existingID] = projected
+		}
+		canonical, snapshotErr := BuildSnapshot(r.gameModule, nextState)
+		if snapshotErr != nil {
+			return ProjectedStateSnapshot{}, snapshotErr
+		}
+		if err := r.appendEvent(NewPlayerJoinedEvent(r.state, nextState, canonical, playerID, nextState.UpdatedAt)); err != nil {
+			return ProjectedStateSnapshot{}, err
+		}
+		r.state = nextState
+	}
+	r.subscribers[playerID] = roomSubscriber{sink: sink, viewer: viewer}
 	r.slowStrikes[playerID] = 0
-	return nil
+	for existingID, projected := range existingSnapshots {
+		existing := r.subscribers[existingID]
+		if sendErr := existing.sink.Send(context.Background(), SnapshotEnvelope(projected)); sendErr == nil {
+			_ = r.recordSnapshotSent(existingID)
+		}
+	}
+	return joiningSnapshot, nil
 }
 
 func (r *RoomRuntime) leave(sink PlayerSink, reason string) error {
@@ -409,12 +491,12 @@ func (r *RoomRuntime) leave(sink PlayerSink, reason string) error {
 		reason = CloseReasonDisconnected
 	}
 
-	current := r.subscribers[playerID]
-	if current == nil || current.SessionID() != sink.SessionID() {
+	current, ok := r.subscribers[playerID]
+	if !ok || current.sink.SessionID() != sink.SessionID() {
 		return nil
 	}
 
-	current.Close(reason)
+	current.sink.Close(reason)
 	if err := r.recordPlayerDisconnected(playerID, reason); err != nil {
 		return err
 	}
@@ -432,8 +514,8 @@ func (r *RoomRuntime) validateCommandSink(sink PlayerSink, playerID string) erro
 	if sink.PlayerID() != playerID {
 		return ErrStalePlayerSession
 	}
-	current := r.subscribers[playerID]
-	if current == nil || current.SessionID() != sink.SessionID() {
+	current, ok := r.subscribers[playerID]
+	if !ok || current.sink.SessionID() != sink.SessionID() {
 		return ErrStalePlayerSession
 	}
 	return nil
@@ -446,12 +528,16 @@ type broadcastOutcome struct {
 	failures            []BroadcastFailure
 }
 
-func (r *RoomRuntime) broadcast(delta StateDelta) broadcastOutcome {
+func (r *RoomRuntime) broadcast(deltas map[string]ProjectedStateDelta) broadcastOutcome {
 	outcome := broadcastOutcome{failures: make([]BroadcastFailure, 0)}
-	snapshot, snapshotErr := r.snapshot()
 
 	for playerID, subscriber := range r.subscribers {
-		err := subscriber.Send(context.Background(), DeltaEnvelope(delta))
+		delta, ok := deltas[playerID]
+		if !ok {
+			outcome.failures = append(outcome.failures, BroadcastFailure{PlayerID: playerID, Err: fmt.Errorf("missing projected delta")})
+			continue
+		}
+		err := subscriber.sink.Send(context.Background(), DeltaEnvelope(delta))
 		if err == nil {
 			outcome.delivered++
 			r.slowStrikes[playerID] = 0
@@ -476,7 +562,7 @@ func (r *RoomRuntime) broadcast(delta StateDelta) broadcastOutcome {
 
 		r.slowStrikes[playerID]++
 		if r.slowStrikes[playerID] >= r.cfg.SlowConsumerStrikeLimit {
-			subscriber.Close(CloseReasonSlowConsumer)
+			subscriber.sink.Close(CloseReasonSlowConsumer)
 			if eventErr := r.recordPlayerDisconnected(playerID, CloseReasonSlowConsumer); eventErr != nil {
 				outcome.failures = append(outcome.failures, BroadcastFailure{
 					PlayerID: playerID,
@@ -488,12 +574,13 @@ func (r *RoomRuntime) broadcast(delta StateDelta) broadcastOutcome {
 			continue
 		}
 
+		snapshot, snapshotErr := BuildProjectedSnapshot(r.gameModule, r.state, subscriber.viewer)
 		if snapshotErr != nil {
 			outcome.failures = append(outcome.failures, BroadcastFailure{
 				PlayerID: playerID,
 				Err:      fmt.Errorf("build compacted snapshot for player %q: %w", playerID, snapshotErr),
 			})
-			subscriber.Close(CloseReasonSlowConsumer)
+			subscriber.sink.Close(CloseReasonSlowConsumer)
 			if eventErr := r.recordPlayerDisconnected(playerID, CloseReasonSlowConsumer); eventErr != nil {
 				outcome.failures = append(outcome.failures, BroadcastFailure{
 					PlayerID: playerID,
@@ -505,12 +592,12 @@ func (r *RoomRuntime) broadcast(delta StateDelta) broadcastOutcome {
 			continue
 		}
 
-		if err := subscriber.Send(context.Background(), SnapshotEnvelope(snapshot)); err != nil {
+		if err := subscriber.sink.Send(context.Background(), SnapshotEnvelope(snapshot)); err != nil {
 			outcome.failures = append(outcome.failures, BroadcastFailure{
 				PlayerID: playerID,
 				Err:      fmt.Errorf("compact delta queue to snapshot for player %q: %w", playerID, err),
 			})
-			subscriber.Close(CloseReasonSlowConsumer)
+			subscriber.sink.Close(CloseReasonSlowConsumer)
 			if eventErr := r.recordPlayerDisconnected(playerID, CloseReasonSlowConsumer); eventErr != nil {
 				outcome.failures = append(outcome.failures, BroadcastFailure{
 					PlayerID: playerID,
@@ -534,7 +621,7 @@ func (r *RoomRuntime) broadcast(delta StateDelta) broadcastOutcome {
 
 func (r *RoomRuntime) shutdown(reason string) {
 	for playerID, subscriber := range r.subscribers {
-		subscriber.Close(reason)
+		subscriber.sink.Close(reason)
 		_ = r.recordPlayerDisconnected(playerID, reason)
 		r.removeSubscriber(playerID)
 	}
@@ -545,7 +632,11 @@ func (r *RoomRuntime) recordSnapshotSent(playerID string) error {
 	if err != nil {
 		return err
 	}
-	return r.appendEvent(NewSnapshotSentEvent(snapshot, playerID, r.clock()))
+	viewScope := game.ViewScopeUnspecified
+	if subscriber, ok := r.subscribers[playerID]; ok {
+		viewScope = subscriber.viewer.Scope
+	}
+	return r.appendEvent(NewSnapshotSentEvent(snapshot, playerID, viewScope, r.clock()))
 }
 
 func (r *RoomRuntime) recordPlayerDisconnected(playerID string, reason string) error {
@@ -566,6 +657,14 @@ func (r *RoomRuntime) appendEvent(event RoomEvent) error {
 
 func (r *RoomRuntime) snapshot() (StateSnapshot, error) {
 	return BuildSnapshot(r.gameModule, r.state)
+}
+
+func (r *RoomRuntime) snapshotFor(sink PlayerSink) (ProjectedStateSnapshot, error) {
+	if err := r.validateCommandSink(sink, sink.PlayerID()); err != nil {
+		return ProjectedStateSnapshot{}, err
+	}
+	subscriber := r.subscribers[sink.PlayerID()]
+	return BuildProjectedSnapshot(r.gameModule, r.state, subscriber.viewer)
 }
 
 func (r *RoomRuntime) removeSubscriber(playerID string) {

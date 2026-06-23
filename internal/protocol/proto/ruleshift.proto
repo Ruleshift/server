@@ -47,16 +47,33 @@ message AuthFailed {
 message JoinRoomRequest {
   string room_id = 1;
   uint64 last_seen_revision = 2;
+  JoinMode join_mode = 3;
 }
 
 message JoinRoomOk {
   string room_id = 1;
   uint64 current_revision = 2;
+  JoinMode join_mode = 3;
+  ViewScope view_scope = 4;
+}
+
+enum JoinMode {
+  JOIN_MODE_UNSPECIFIED = 0;
+  JOIN_MODE_PLAYER = 1;
+  JOIN_MODE_SPECTATOR = 2;
+}
+
+enum ViewScope {
+  VIEW_SCOPE_UNSPECIFIED = 0;
+  VIEW_SCOPE_PLAYER = 1;
+  VIEW_SCOPE_PUBLIC = 2;
+  VIEW_SCOPE_FULL = 3;
 }
 
 enum GameType {
   GAME_TYPE_UNSPECIFIED = 0;
   GAME_TYPE_XIANGQI = 1;
+  GAME_TYPE_HIDDEN_NUMBER = 2;
 }
 
 enum GameCommandType {
@@ -64,6 +81,7 @@ enum GameCommandType {
   GAME_COMMAND_TYPE_DO_MOVE = 1;
   GAME_COMMAND_TYPE_RESIGN = 2;
   GAME_COMMAND_TYPE_OFFER_DRAW = 3;
+  GAME_COMMAND_TYPE_SET_SECRET = 4;
 }
 
 enum XiangqiSide {
@@ -87,6 +105,7 @@ message GameCommand {
     DoMove do_move = 10;
     Resign resign = 11;
     OfferDraw offer_draw = 12;
+    SetSecret set_secret = 13;
   }
 }
 
@@ -100,6 +119,10 @@ message Resign {}
 
 message OfferDraw {}
 
+message SetSecret {
+  int64 value = 1;
+}
+
 message SquareUpdate {
   uint32 square = 1;
   uint32 piece = 2;
@@ -109,8 +132,10 @@ message StateSnapshot {
   string room_id = 1;
   uint64 revision = 2;
   GameType game_type = 3;
+  uint64 view_hash = 4;
   oneof state {
     XiangqiSnapshot xiangqi = 10;
+    HiddenNumberSnapshot hidden_number = 11;
   }
 }
 
@@ -132,8 +157,11 @@ message StateDelta {
   uint64 new_revision = 3;
   string changed_by_player_id = 4;
   GameType game_type = 5;
+  uint64 view_hash = 6;
+  bool no_visible_change = 7;
   oneof delta {
     XiangqiDelta xiangqi = 10;
+    HiddenNumberDelta hidden_number = 11;
   }
 }
 
@@ -148,6 +176,23 @@ message XiangqiDelta {
   string winner_player_id = 8;
   string draw_offered_by_player_id = 9;
   uint64 state_hash = 10;
+}
+
+message HiddenNumberPlayerView {
+  string player_id = 1;
+  bool has_secret = 2;
+  optional int64 secret = 3;
+}
+
+message HiddenNumberSnapshot {
+  repeated HiddenNumberPlayerView players = 1;
+  GameStatus status = 2;
+}
+
+message HiddenNumberDelta {
+  string player_id = 1;
+  bool has_secret = 2;
+  optional int64 secret = 3;
 }
 
 message SnapshotRequest {

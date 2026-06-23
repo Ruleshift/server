@@ -22,8 +22,20 @@ func (testGameModule) NewState(time.Time) (any, error) {
 	return &testGameState{}, nil
 }
 
-func (testGameModule) PlayerJoined(state any, _ string) (any, error) {
-	return state, nil
+func (testGameModule) PlayerJoined(state any, _ string) (any, bool, error) {
+	return state, false, nil
+}
+
+func (m testGameModule) ProjectSnapshot(state any, _ game.Viewer) (game.ViewSnapshot, error) {
+	snapshot, err := m.Snapshot(state)
+	if err != nil {
+		return game.ViewSnapshot{}, err
+	}
+	return game.ViewSnapshot{Type: snapshot.Type, Status: snapshot.Status, ViewHash: snapshot.StateHash, Payload: snapshot.Payload}, nil
+}
+
+func (testGameModule) ProjectDelta(_ any, _ any, delta game.Delta, _ game.Viewer) (game.ViewDelta, error) {
+	return game.ViewDelta{Type: delta.Type, CommandType: delta.CommandType, Status: delta.Status, ViewHash: delta.StateHash, Payload: delta.Payload}, nil
 }
 
 func (testGameModule) Snapshot(state any) (game.Snapshot, error) {

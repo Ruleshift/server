@@ -74,3 +74,29 @@ func BenchmarkServerEnvelopeCodec(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkHiddenNumberSnapshotCodec(b *testing.B) {
+	secret := int64(424242)
+	env := &ruleshiftv1.ServerEnvelope{
+		ProtocolVersion: CurrentVersion,
+		Payload: &ruleshiftv1.ServerEnvelope_StateSnapshot{StateSnapshot: &ruleshiftv1.StateSnapshot{
+			RoomId: "hidden-room", Revision: 12, GameType: ruleshiftv1.GameType_GAME_TYPE_HIDDEN_NUMBER, ViewHash: 99,
+			State: &ruleshiftv1.StateSnapshot_HiddenNumber{HiddenNumber: &ruleshiftv1.HiddenNumberSnapshot{
+				Players: []*ruleshiftv1.HiddenNumberPlayerView{
+					{PlayerId: "player-a", HasSecret: true, Secret: &secret},
+					{PlayerId: "player-b", HasSecret: true},
+				},
+			}},
+		}},
+	}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		payload, err := EncodeServerEnvelope(env)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if _, err := DecodeServerEnvelope(payload); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

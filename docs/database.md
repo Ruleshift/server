@@ -19,7 +19,7 @@ Every developer/module pair receives a database named
 
 - `rooms`: current room revision and lifecycle projection;
 - `room_players`: durable membership and disconnect metadata;
-- `room_events`: ordered authoritative event log used for replay;
+- `room_events`: ordered authoritative event log used for replay; snapshot audit rows include the effective `view_scope` without persisting projected payloads;
 - `ruleshift_schema_migrations`: platform and module migration history.
 
 The module's own migrations run after these base migrations. Databases deliberately store `player_id` without a cross-database foreign key; the canonical identity remains in the control database.

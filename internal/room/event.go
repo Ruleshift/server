@@ -15,6 +15,7 @@ const (
 	EventTypeGameMoveApplied    EventType = "GameMoveApplied"
 	EventTypePlayerResigned     EventType = "PlayerResigned"
 	EventTypeDrawOffered        EventType = "DrawOffered"
+	EventTypeSecretSet          EventType = "SecretSet"
 	EventTypeSnapshotSent       EventType = "SnapshotSent"
 	EventTypePlayerDisconnected EventType = "PlayerDisconnected"
 )
@@ -32,6 +33,7 @@ type RoomEvent struct {
 	CommandPayload   any
 	StateHash        uint64
 	Status           game.Status
+	ViewScope        game.ViewScope
 	Reason           string
 	OccurredAt       time.Time
 }
@@ -46,13 +48,11 @@ func NewRoomCreatedEvent(state RoomState) RoomEvent {
 	}
 }
 
-func NewPlayerJoinedEvent(state RoomState, playerID string, at time.Time) RoomEvent {
+func NewPlayerJoinedEvent(before RoomState, after RoomState, snapshot StateSnapshot, playerID string, at time.Time) RoomEvent {
 	return RoomEvent{
-		Type:       EventTypePlayerJoined,
-		RoomID:     state.RoomID,
-		PlayerID:   playerID,
-		Revision:   state.Revision,
-		GameType:   state.GameType,
+		Type: EventTypePlayerJoined, RoomID: after.RoomID, PlayerID: playerID,
+		Revision: after.Revision, PreviousRevision: before.Revision, NewRevision: after.Revision,
+		GameType: after.GameType, StateHash: snapshot.Game.StateHash, Status: snapshot.Game.Status,
 		OccurredAt: at,
 	}
 }
@@ -66,6 +66,8 @@ func NewGameCommandEvent(delta StateDelta) (RoomEvent, error) {
 		eventType = EventTypePlayerResigned
 	case game.CommandOfferDraw:
 		eventType = EventTypeDrawOffered
+	case game.CommandSetSecret:
+		eventType = EventTypeSecretSet
 	default:
 		return RoomEvent{}, fmt.Errorf("%w: %d", ErrInvalidCommand, delta.Game.CommandType)
 	}
@@ -85,7 +87,7 @@ func NewGameCommandEvent(delta StateDelta) (RoomEvent, error) {
 	}, nil
 }
 
-func NewSnapshotSentEvent(snapshot StateSnapshot, playerID string, at time.Time) RoomEvent {
+func NewSnapshotSentEvent(snapshot StateSnapshot, playerID string, viewScope game.ViewScope, at time.Time) RoomEvent {
 	return RoomEvent{
 		Type:       EventTypeSnapshotSent,
 		RoomID:     snapshot.RoomID,
@@ -94,6 +96,7 @@ func NewSnapshotSentEvent(snapshot StateSnapshot, playerID string, at time.Time)
 		GameType:   snapshot.Game.Type,
 		StateHash:  snapshot.Game.StateHash,
 		Status:     snapshot.Game.Status,
+		ViewScope:  viewScope,
 		OccurredAt: at,
 	}
 }

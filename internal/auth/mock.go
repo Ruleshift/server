@@ -25,6 +25,12 @@ func (p *MockProvider) AuthenticateTicket(ctx context.Context, ticket string) (*
 	}
 
 	playerID := strings.TrimSpace(strings.TrimPrefix(ticket, prefix))
+	var permissions Permissions
+	const trustedPrefix = "trusted:"
+	if strings.HasPrefix(playerID, trustedPrefix) {
+		playerID = strings.TrimSpace(strings.TrimPrefix(playerID, trustedPrefix))
+		permissions |= PermissionViewFullState
+	}
 	if playerID == "" {
 		return nil, fmt.Errorf("%w: empty mock player id", ErrInvalidTicket)
 	}
@@ -35,5 +41,6 @@ func (p *MockProvider) AuthenticateTicket(ctx context.Context, ticket string) (*
 		DisplayName:       playerID,
 		AppID:             "local",
 		OwnershipVerified: true,
+		Permissions:       permissions,
 	}, nil
 }

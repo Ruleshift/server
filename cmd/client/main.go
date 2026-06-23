@@ -223,9 +223,6 @@ func (c *cliClient) joinRoom(ctx context.Context, roomID string, lastSeenRevisio
 			joinedRevision = payload.JoinRoomOk.GetCurrentRevision()
 			c.lastRevision = joinedRevision
 			fmt.Printf("join ok room=%s revision=%d\n", payload.JoinRoomOk.GetRoomId(), joinedRevision)
-			if lastSeenRevision == joinedRevision {
-				return nil
-			}
 		case *ruleshiftv1.ServerEnvelope_StateSnapshot:
 			c.applySnapshot(payload.StateSnapshot)
 			printSnapshot(payload.StateSnapshot)

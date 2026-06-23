@@ -18,6 +18,17 @@ type Identity struct {
 	DisplayName       string
 	AppID             string
 	OwnershipVerified bool
+	Permissions       Permissions
+}
+
+type Permissions uint32
+
+const (
+	PermissionViewFullState Permissions = 1 << iota
+)
+
+func (p Permissions) Has(permission Permissions) bool {
+	return p&permission != 0
 }
 
 type Provider interface {

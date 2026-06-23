@@ -422,8 +422,10 @@ Authoritative-модуль реализует интерфейс `game.Module`:
 type Module interface {
     Type() Type
     NewState(now time.Time) (any, error)
-    PlayerJoined(state any, playerID string) (any, error)
+    PlayerJoined(state any, playerID string) (next any, changed bool, err error)
     Snapshot(state any) (Snapshot, error)
+    ProjectSnapshot(state any, viewer Viewer) (ViewSnapshot, error)
+    ProjectDelta(before any, after any, delta Delta, viewer Viewer) (ViewDelta, error)
     Apply(state any, command Command) (any, Delta, error)
 }
 ```
@@ -536,18 +538,18 @@ func (Module) NewState(_ time.Time) (any, error) {
     return &State{}, nil
 }
 
-func (Module) PlayerJoined(raw any, playerID string) (any, error) {
+func (Module) PlayerJoined(raw any, playerID string) (any, bool, error) {
     state, err := stateFrom(raw)
     if err != nil {
-        return raw, err
+        return raw, false, err
     }
     if playerID == "" {
-        return raw, fmt.Errorf("player id must not be empty")
+        return raw, false, fmt.Errorf("player id must not be empty")
     }
 
     // Даже если join не меняет предметное состояние, возвращаем отдельную копию.
     next := *state
-    return &next, nil
+    return &next, false, nil
 }
 
 func (Module) Snapshot(raw any) (game.Snapshot, error) {
@@ -567,6 +569,24 @@ func (Module) Snapshot(raw any) (game.Snapshot, error) {
     }
     base.Payload = payload
     return base, nil
+}
+
+func (m Module) ProjectSnapshot(raw any, _ game.Viewer) (game.ViewSnapshot, error) {
+    snapshot, err := m.Snapshot(raw)
+    if err != nil {
+        return game.ViewSnapshot{}, err
+    }
+    return game.ViewSnapshot{
+        Type: snapshot.Type, Status: snapshot.Status,
+        ViewHash: snapshot.StateHash, Payload: snapshot.Payload,
+    }, nil
+}
+
+func (Module) ProjectDelta(_ any, _ any, delta game.Delta, _ game.Viewer) (game.ViewDelta, error) {
+    return game.ViewDelta{
+        Type: delta.Type, CommandType: delta.CommandType,
+        Status: delta.Status, ViewHash: delta.StateHash, Payload: delta.Payload,
+    }, nil
 }
 
 func (Module) Apply(raw any, command game.Command) (any, game.Delta, error) {
@@ -862,6 +882,70 @@ registry := room.NewRegistry(room.RuntimeConfig{
 ```
 
 > Текущее ограничение: один gateway process обслуживает один authoritative game module. Для одновременной работы Xiangqi и Counter потребуется registry/router по module key или отдельный gateway deployment на модуль. Простого добавления второго `NewModule()` недостаточно.
+
+## ViewScope и неполная информация
+
+`RoomRuntime` хранит полное authoritative-состояние, а клиенту отправляет только результат `ProjectSnapshot` или `ProjectDelta`. Gateway передаёт модулю уже вычисленный `game.Viewer`: модуль не должен читать scope, роль или player id из command payload.
+
+Семантика scope фиксирована:
+
+- `ViewScopePlayer` видит публичные данные и приватные поля только своего `PlayerID`;
+- `ViewScopePublic` не видит приватные поля ни одного игрока;
+- `ViewScopeFull` видит полное состояние только в сочетании с `JoinModeSpectator`; permission для него подтверждает auth provider;
+- `ViewScopeUnspecified` и неизвестные значения работают fail-closed и не раскрывают приватные поля.
+
+Используйте общие helpers вместо самостоятельной проверки enum:
+
+```go
+if viewer.CanSeePrivateOf(ownerPlayerID) {
+    projected.Secret = &secret // presence означает, что поле разрешено видеть
+}
+
+if viewer.CanSeeFullState() {
+    // trusted spectator only
+}
+```
+
+Минимальный шаблон проекции:
+
+```go
+func (Module) ProjectSnapshot(raw any, viewer game.Viewer) (game.ViewSnapshot, error) {
+    state, err := stateFrom(raw)
+    if err != nil {
+        return game.ViewSnapshot{}, err
+    }
+    payload := buildVisibleSnapshot(state, viewer)
+    return game.ViewSnapshot{
+        Type:     game.TypeExample,
+        Status:   state.Status,
+        ViewHash: hashVisibleSnapshot(payload),
+        Payload:  payload,
+    }, nil
+}
+
+func (Module) ProjectDelta(before, after any, canonical game.Delta, viewer game.Viewer) (game.ViewDelta, error) {
+    beforeView := buildVisibleSnapshot(mustState(before), viewer)
+    afterView := buildVisibleSnapshot(mustState(after), viewer)
+    result := game.ViewDelta{
+        Type:        canonical.Type,
+        CommandType: canonical.CommandType,
+        Status:      canonical.Status,
+        ViewHash:    hashVisibleSnapshot(afterView),
+    }
+    if hashVisibleSnapshot(beforeView) == result.ViewHash {
+        result.NoVisibleChange = true
+        return result, nil
+    }
+    result.Payload = buildVisibleDelta(canonical, viewer)
+    return result, nil
+}
+```
+
+`view_hash` вычисляется после фильтрации и не зависит от скрытых данных. Canonical `Snapshot`, `Delta` и `StateHash` предназначены только для event log и replay; не передавайте их protobuf serializer и не используйте canonical hash на клиенте. Для optional scalar в protobuf проверяйте presence, а не специальное значение вроде нуля.
+
+Обязательная тестовая матрица модуля: оба seated player, public spectator, trusted spectator, unspecified scope, сочетание `FULL + PLAYER` и попытка передать scope через клиентскую команду. Тест должен проверять отсутствие приватного protobuf-поля, разные `view_hash` там, где проекции различаются, и `no_visible_change` для скрытого изменения.
+
+Рабочий пример находится в `internal/game/hiddennumber`.
 
 ## 19. Минимальные тесты authoritative-модуля
 

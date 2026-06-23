@@ -33,8 +33,9 @@ Room state is:
 - `room_id`
 - `revision uint64`
 - module-owned game state. The current `GAME_TYPE_XIANGQI` snapshot includes FEN, packed board pieces, side to move, seated player ids, game status, and state hash.
+- a recipient-specific `view_hash`, calculated only from fields visible to that recipient.
 
-Every accepted `GameCommand` increments revision by exactly one. Clients observe ordered `StateDelta` messages or a recovery `StateSnapshot`.
+Every accepted `GameCommand` increments revision by exactly one. Seating a new player also advances revision because it changes authoritative game state. All clients observe the same ordered revisions, but their projected payloads and `view_hash` values can differ. `no_visible_change` advances a recipient through a revision that changed no visible fields.
 
 ## Game Commands
 
@@ -43,17 +44,21 @@ Clients send `GameCommand` after auth and room join:
 - `DoMove` carries either compact square indexes (`from_square`, `to_square`, 0..89) or a UCI-style move string such as `h2e2`.
 - `Resign` marks the game resigned and records the winner when the player is seated.
 - `OfferDraw` records a draw offer; a later opponent offer accepts the draw.
+- `SetSecret` is used by the Hidden Number demo and is never echoed to unauthorized views.
 
 The room runtime validates `room_id` and `expected_revision`. The Xiangqi module validates seating, side to move, and legal moves through the engine before mutating state.
 
 ## Join And Resume
 
-`JoinRoomRequest.last_seen_revision` lets a client resume from its last applied room revision. The server compares that value with the authoritative room revision:
+`JoinRoomRequest.join_mode` selects a player or spectator connection. The gateway, not the client, derives the effective `ViewScope`:
 
-- if the revisions match, the server sends `JoinRoomOk` only;
-- if the revisions differ, the server sends `JoinRoomOk` followed by a `StateSnapshot`.
+- `PLAYER` sees public state plus that player's private fields;
+- `PUBLIC` is the default spectator view and contains no private fields;
+- `FULL` is available only to a spectator with a server-authenticated full-view permission.
 
-The MVP does not keep a delta history ring buffer, so snapshot recovery is the only catch-up path. Reconnecting with the same authenticated `player_id` replaces the previous session, closes its outbound stream, and prevents commands from the old session from mutating room state.
+Every join and reconnect returns `JoinRoomOk` followed by a projected `StateSnapshot`, even when `last_seen_revision` matches. The field remains reserved for a future delta-history resume path. Reconnecting with the same authenticated `player_id` replaces the previous session and prevents the old session from mutating state.
+
+Canonical snapshots, deltas, and state hashes are server-only data used for durable events and replay. They must never be serialized as a fallback when projection fails.
 
 ## Generation Plan
 

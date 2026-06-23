@@ -35,6 +35,25 @@ type StateDelta struct {
 	AppliedAt         time.Time
 }
 
+type ProjectedStateDelta struct {
+	RoomID            string
+	PreviousRevision  uint64
+	NewRevision       uint64
+	ChangedByPlayerID string
+	Game              game.ViewDelta
+}
+
+func ProjectDelta(module game.Module, before RoomState, after RoomState, delta StateDelta, viewer game.Viewer) (ProjectedStateDelta, error) {
+	projected, err := module.ProjectDelta(before.GameState, after.GameState, delta.Game, viewer)
+	if err != nil {
+		return ProjectedStateDelta{}, err
+	}
+	return ProjectedStateDelta{
+		RoomID: delta.RoomID, PreviousRevision: delta.PreviousRevision, NewRevision: delta.NewRevision,
+		ChangedByPlayerID: delta.ChangedByPlayerID, Game: projected,
+	}, nil
+}
+
 func ApplyGameCommand(module game.Module, state RoomState, cmd GameCommand, now time.Time) (RoomState, StateDelta, error) {
 	if module == nil {
 		return state, StateDelta{}, ErrNilGameModule

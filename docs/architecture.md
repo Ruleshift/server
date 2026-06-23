@@ -34,7 +34,7 @@ Phase 5 gateway behavior:
 - WebSocket messages are binary;
 - binary payloads are protobuf envelopes serialized directly with the generated protobuf runtime;
 - `AuthRequest` must be the first client envelope;
-- `JoinRoomRequest` creates or joins a room and returns `JoinRoomOk`, followed by `StateSnapshot` only when the client's `last_seen_revision` differs from the current room revision;
+- `JoinRoomRequest` creates or joins a room and returns `JoinRoomOk` followed by a recipient-projected `StateSnapshot`;
 - `GameCommand` is submitted to the authoritative room runtime;
 - successful commands are broadcast as `StateDelta` to all joined sessions;
 - app-level `Ping` returns `Pong`;
@@ -83,9 +83,9 @@ Current behavior:
 
 - `internal/room` owns queueing, revisions, snapshots, subscribers, and replay.
 - `internal/game` defines the game module contract and abstract command/snapshot/delta envelopes.
-- Concrete modules own their payload structs; `internal/game/xiangqi` embeds the abstract envelopes for Xiangqi moves, snapshots, deltas, sides, and board updates.
+- Concrete modules own canonical and projected payload structs. `internal/game/hiddennumber` demonstrates recipient-specific private data.
 - `internal/game/xiangqi` adapts `github.com/laines-it/xiangqi-go/engine` via its declared module path and applies legal `DoMove` commands through `GenerateLEGAL` and `DoMove`.
-- first and second joined players are seated as red and black; further joined clients can observe.
+- first and second player-mode joins are seated as red and black; additional clients must explicitly join as spectators.
 - accepted `DoMove`, `Resign`, and `OfferDraw` commands increment revision exactly once;
 - invalid game commands are rejected without changing state;
 - `expected_revision == 0` means blind update;
@@ -93,15 +93,15 @@ Current behavior:
 
 ### State Replication
 
-Successful commands produce a monotonically increasing revision and a `StateDelta`. Joined clients are represented inside room logic by the small `PlayerSink` interface. The runtime sends the same protobuf envelope to every joined sink, keeping WebSocket implementation details out of room logic.
+Successful commands produce a monotonically increasing revision and a canonical `StateDelta`. Before commit, the runtime asks the module for a projected delta for every stored server-side `Viewer`. It sends only projected types; payloads and `view_hash` may differ while revision ordering remains identical.
 
-Joining clients receive `JoinRoomOk`. They receive a `StateSnapshot` only when their `last_seen_revision` does not match the room's current revision. The MVP uses snapshots for recovery rather than replaying a per-room delta history.
+Every joining client receives `JoinRoomOk` and a projected `StateSnapshot`. New seat assignments advance revision and cause personalized snapshots for existing participants. Spectator joins do not mutate game state.
 
 ### Backpressure
 
 Gateway websocket sessions own bounded outbound queues. Runtime broadcast uses only non-blocking sends through `PlayerSink`:
 
-- first delta overflow increments a slow-consumer strike and compacts queued deltas into a fresh `StateSnapshot`;
+- first delta overflow increments a slow-consumer strike and compacts queued deltas into a fresh snapshot projected for that consumer;
 - repeated overflow closes the session with `slow_consumer`;
 - closed sessions are removed from the room subscriber set;
 - runtime shutdown closes joined sessions with `shutdown`.
@@ -110,7 +110,7 @@ The WebSocket writer loop drains bounded session queues outside the room runtime
 
 ### Reconnect
 
-Clients keep `last_seen_revision`. On join/resume the server compares it with current room revision and sends a snapshot if needed. Reconnecting with the same authenticated `player_id` replaces the previous session, closes it with `replaced`, and room command submission checks the current session id before mutating state. The player id comes from the auth provider, not from client command payloads.
+Clients keep `last_seen_revision`, but the current implementation always sends a join snapshot because revision alone cannot prove that a recipient-specific view is current. Reconnecting with the same authenticated `player_id` replaces the previous session. Player identity and full-view permission come from the auth provider, not client payloads.
 
 ### Event Log And Replay
 
@@ -123,6 +123,7 @@ Event types are:
 - `GameMoveApplied`
 - `PlayerResigned`
 - `DrawOffered`
+- `SecretSet`
 - `SnapshotSent`
 - `PlayerDisconnected`
 
