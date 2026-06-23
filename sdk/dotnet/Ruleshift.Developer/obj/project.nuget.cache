@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "dgSpecHash": "YV2kLCCvwG0=",
+  "success": true,
+  "projectFilePath": "c:\\Users\\victo\\Ruleshift\\server\\sdk\\dotnet\\Ruleshift.Developer\\Ruleshift.Developer.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\victo\\.nuget\\packages\\newtonsoft.json\\13.0.3\\newtonsoft.json.13.0.3.nupkg.sha512"
+  ],
+  "logs": []
+}

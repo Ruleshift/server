@@ -36,7 +36,6 @@ type StateDelta struct {
 }
 
 func ApplyGameCommand(module game.Module, state RoomState, cmd GameCommand, now time.Time) (RoomState, StateDelta, error) {
-	fmt.Println("module ", module.Type())
 	if module == nil {
 		return state, StateDelta{}, ErrNilGameModule
 	}

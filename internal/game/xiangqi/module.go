@@ -1,7 +1,9 @@
 package xiangqi
 
 import (
+	"context"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"strings"
@@ -103,6 +105,49 @@ func (Module) Type() game.Type {
 	return game.TypeXiangqi
 }
 
+func (Module) DatabaseDefinition() game.DatabaseDefinition {
+	return game.DatabaseDefinition{
+		Name: "xiangqi",
+		Migrations: []game.DatabaseMigration{
+			{
+				Version: 1,
+				Name:    "create_xiangqi_game_records",
+				SQL: `CREATE TABLE xiangqi_game_records (
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+    initial_fen TEXT NOT NULL,
+    final_fen TEXT,
+    winner_player_id TEXT,
+    result TEXT,
+    started_at TIMESTAMPTZ NOT NULL,
+    finished_at TIMESTAMPTZ
+);`,
+			},
+		},
+	}
+}
+
+func (Module) MarshalCommandPayload(_ context.Context, commandType game.CommandType, payload any) ([]byte, error) {
+	if commandType != game.CommandDoMove || payload == nil {
+		return nil, nil
+	}
+	move, err := moveFromCommand(game.Command{Type: commandType, Payload: payload})
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(move)
+}
+
+func (Module) UnmarshalCommandPayload(_ context.Context, commandType game.CommandType, payload []byte) (any, error) {
+	if commandType != game.CommandDoMove || len(payload) == 0 || string(payload) == "null" {
+		return nil, nil
+	}
+	var move Move
+	if err := json.Unmarshal(payload, &move); err != nil {
+		return nil, fmt.Errorf("decode xiangqi move: %w", err)
+	}
+	return move, nil
+}
+
 func (Module) NewState(now time.Time) (any, error) {
 	position := &xq.PositionNG{}
 	position.Set(initialFEN)
@@ -123,6 +168,7 @@ func (Module) PlayerJoined(raw any, playerID string) (any, error) {
 	if playerID == "" {
 		return raw, fmt.Errorf("player id must not be empty")
 	}
+	state = state.clone()
 
 	switch {
 	case state.redPlayerID == playerID || state.blackPlayerID == playerID:
@@ -151,6 +197,7 @@ func (Module) Apply(raw any, command game.Command) (any, game.Delta, error) {
 	if command.PlayerID == "" {
 		return raw, game.Delta{}, fmt.Errorf("player id must not be empty")
 	}
+	state = state.clone()
 
 	switch command.Type {
 	case game.CommandDoMove:
@@ -365,6 +412,21 @@ func (s *State) opponentPlayerID(side Side) string {
 
 func (s *State) finished() bool {
 	return s.status == game.StatusResigned || s.status == game.StatusDrawn
+}
+
+func (s *State) clone() *State {
+	position := &xq.PositionNG{}
+	position.Set(s.position.FEN())
+	return &State{
+		position:              position,
+		status:                s.status,
+		redPlayerID:           s.redPlayerID,
+		blackPlayerID:         s.blackPlayerID,
+		winnerPlayerID:        s.winnerPlayerID,
+		drawOfferedByPlayerID: s.drawOfferedByPlayerID,
+		createdAt:             s.createdAt,
+		updatedAt:             s.updatedAt,
+	}
 }
 
 func (s *State) hash() uint64 {

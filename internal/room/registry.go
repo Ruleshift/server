@@ -1,8 +1,10 @@
 package room
 
 import (
+	"context"
 	"fmt"
 	"sync"
+	"time"
 )
 
 type Registry struct {
@@ -30,7 +32,31 @@ func (r *Registry) GetOrCreate(roomID string) (*RoomRuntime, bool, error) {
 		return runtime, false, nil
 	}
 
-	runtime, err := NewRuntime(roomID, r.cfg)
+	var runtime *RoomRuntime
+	var err error
+	if r.cfg.EventStore != nil {
+		timeout := r.cfg.EventStoreTimeout
+		if timeout <= 0 {
+			timeout = 5 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		events, listErr := r.cfg.EventStore.List(ctx, roomID)
+		cancel()
+		if listErr != nil {
+			return nil, false, fmt.Errorf("load room events: %w", listErr)
+		}
+		if len(events) > 0 {
+			state, replayErr := ReplayEvents(r.cfg.GameModule, events)
+			if replayErr != nil {
+				return nil, false, fmt.Errorf("replay room events: %w", replayErr)
+			}
+			runtime, err = NewRuntimeFromState(state, r.cfg)
+		} else {
+			runtime, err = NewRuntime(roomID, r.cfg)
+		}
+	} else {
+		runtime, err = NewRuntime(roomID, r.cfg)
+	}
 	if err != nil {
 		return nil, false, fmt.Errorf("create room runtime: %w", err)
 	}

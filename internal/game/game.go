@@ -1,6 +1,7 @@
 package game
 
 import (
+	"context"
 	"errors"
 	"time"
 )
@@ -66,7 +67,39 @@ type Delta struct {
 type Module interface {
 	Type() Type
 	NewState(now time.Time) (any, error)
+	// PlayerJoined and Apply must not mutate state in place. The room runtime
+	// publishes returned state only after its durable event append succeeds.
 	PlayerJoined(state any, playerID string) (any, error)
 	Snapshot(state any) (Snapshot, error)
 	Apply(state any, command Command) (any, Delta, error)
+}
+
+// DatabaseMigration is one immutable, forward-only module database migration.
+// Versions are scoped to DatabaseDefinition.Name and must be strictly positive.
+type DatabaseMigration struct {
+	Version uint64
+	Name    string
+	SQL     string
+}
+
+// DatabaseDefinition lets a game module own its durable schema without coupling
+// the module to a concrete database driver. The platform creates one PostgreSQL
+// database per definition and applies these migrations after its base room schema.
+type DatabaseDefinition struct {
+	Name       string
+	Migrations []DatabaseMigration
+}
+
+// DatabaseModule is optional. Modules without it remain usable with the in-memory
+// event store, which keeps small tests and development modules lightweight.
+type DatabaseModule interface {
+	Module
+	DatabaseDefinition() DatabaseDefinition
+}
+
+// CommandPayloadCodec preserves concrete module command payloads in the generic
+// room event log so replay after a restart receives the same Go payload type.
+type CommandPayloadCodec interface {
+	MarshalCommandPayload(ctx context.Context, commandType CommandType, payload any) ([]byte, error)
+	UnmarshalCommandPayload(ctx context.Context, commandType CommandType, payload []byte) (any, error)
 }

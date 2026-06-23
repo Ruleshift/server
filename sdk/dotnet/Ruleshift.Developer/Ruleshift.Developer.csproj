@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <PackageId>Ruleshift.Developer</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Ruleshift</Authors>
+    <Description>Developer SDK for provisioning and inspecting Ruleshift game modules.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../../unity/com.ruleshift.developer/Editor/RuleshiftDeveloperClient.cs" Link="RuleshiftDeveloperClient.cs" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

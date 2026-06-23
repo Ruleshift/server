@@ -1,6 +1,7 @@
 package xiangqi
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -96,5 +97,65 @@ func TestModuleAppliesLegalMovesAndSeatsPlayers(t *testing.T) {
 	}
 	if delta.Status != game.StatusResigned || xDelta.WinnerPlayerID != "player-black" {
 		t.Fatalf("resign delta = %#v", delta)
+	}
+}
+
+func TestModuleDatabaseDefinitionAndPayloadCodec(t *testing.T) {
+	module := NewModule()
+	definition := module.DatabaseDefinition()
+	if definition.Name != "xiangqi" || len(definition.Migrations) == 0 {
+		t.Fatalf("database definition = %#v, want named schema with migrations", definition)
+	}
+
+	want := Move{FromSquare: 1, ToSquare: 2, UCI: "a0a1"}
+	encoded, err := module.MarshalCommandPayload(context.Background(), game.CommandDoMove, want)
+	if err != nil {
+		t.Fatalf("MarshalCommandPayload returned error: %v", err)
+	}
+	decoded, err := module.UnmarshalCommandPayload(context.Background(), game.CommandDoMove, encoded)
+	if err != nil {
+		t.Fatalf("UnmarshalCommandPayload returned error: %v", err)
+	}
+	if got, ok := decoded.(Move); !ok || got != want {
+		t.Fatalf("decoded payload = %#v, want %#v", decoded, want)
+	}
+}
+
+func TestModuleDoesNotMutateUncommittedState(t *testing.T) {
+	module := NewModule()
+	original, err := module.NewState(time.Unix(100, 0).UTC())
+	if err != nil {
+		t.Fatalf("NewState returned error: %v", err)
+	}
+	joined, err := module.PlayerJoined(original, "player-red")
+	if err != nil {
+		t.Fatalf("PlayerJoined returned error: %v", err)
+	}
+	originalSnapshot, err := module.Snapshot(original)
+	if err != nil {
+		t.Fatalf("original Snapshot returned error: %v", err)
+	}
+	originalPayload, _ := SnapshotPayload(originalSnapshot)
+	if originalPayload.RedPlayerID != "" {
+		t.Fatalf("original red player = %q, want empty", originalPayload.RedPlayerID)
+	}
+
+	beforeMove := joined
+	_, _, err = module.Apply(joined, game.Command{
+		PlayerID: "player-red",
+		Type:     game.CommandDoMove,
+		Payload:  Move{UCI: "h2e2"},
+		At:       time.Unix(101, 0).UTC(),
+	})
+	if err != nil {
+		t.Fatalf("Apply returned error: %v", err)
+	}
+	beforeSnapshot, err := module.Snapshot(beforeMove)
+	if err != nil {
+		t.Fatalf("before-move Snapshot returned error: %v", err)
+	}
+	beforePayload, _ := SnapshotPayload(beforeSnapshot)
+	if beforePayload.FEN != initialFEN {
+		t.Fatalf("uncommitted input FEN = %q, want initial FEN", beforePayload.FEN)
 	}
 }

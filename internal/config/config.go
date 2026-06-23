@@ -10,6 +10,12 @@ import (
 type Config struct {
 	Addr                 string
 	Env                  string
+	DatabaseURL          string
+	DatabaseAdminURL     string
+	ModuleDatabasePrefix string
+	DeveloperID          string
+	DeveloperName        string
+	DeveloperAPIKey      string
 	MaxMessageBytes      int
 	RoomInputQueueSize   int
 	SessionSendQueueSize int
@@ -25,6 +31,12 @@ func Load() (Config, error) {
 	cfg := Config{
 		Addr:                 envString("RULESHIFT_ADDR", ":8080"),
 		Env:                  envString("RULESHIFT_ENV", "dev"),
+		DatabaseURL:          envString("RULESHIFT_DATABASE_URL", ""),
+		DatabaseAdminURL:     envString("RULESHIFT_DATABASE_ADMIN_URL", ""),
+		ModuleDatabasePrefix: envString("RULESHIFT_MODULE_DATABASE_PREFIX", "ruleshift_module_"),
+		DeveloperID:          envString("RULESHIFT_DEVELOPER_ID", "default"),
+		DeveloperName:        envString("RULESHIFT_DEVELOPER_NAME", "Default developer"),
+		DeveloperAPIKey:      envString("RULESHIFT_DEVELOPER_API_KEY", ""),
 		MaxMessageBytes:      64 * 1024,
 		RoomInputQueueSize:   1024,
 		SessionSendQueueSize: 256,
@@ -77,6 +89,18 @@ func (c Config) Validate() error {
 	}
 	if c.MaxMessageBytes <= 0 {
 		return fmt.Errorf("RULESHIFT_MAX_MESSAGE_BYTES must be positive")
+	}
+	if c.ModuleDatabasePrefix == "" {
+		return fmt.Errorf("RULESHIFT_MODULE_DATABASE_PREFIX must not be empty")
+	}
+	if c.DeveloperID == "" {
+		return fmt.Errorf("RULESHIFT_DEVELOPER_ID must not be empty")
+	}
+	if c.DeveloperName == "" {
+		return fmt.Errorf("RULESHIFT_DEVELOPER_NAME must not be empty")
+	}
+	if c.DeveloperAPIKey != "" && c.DatabaseURL == "" {
+		return fmt.Errorf("RULESHIFT_DEVELOPER_API_KEY requires RULESHIFT_DATABASE_URL")
 	}
 	if c.RoomInputQueueSize <= 0 {
 		return fmt.Errorf("RULESHIFT_ROOM_INPUT_QUEUE_SIZE must be positive")

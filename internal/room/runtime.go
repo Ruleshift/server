@@ -17,6 +17,7 @@ var ErrStalePlayerSession = errors.New("player session is no longer current")
 type RuntimeConfig struct {
 	InputQueueSize          int
 	SlowConsumerStrikeLimit int
+	EventStoreTimeout       time.Duration
 	EventStore              EventStore
 	GameModule              game.Module
 }
@@ -78,14 +79,43 @@ func NewRuntime(roomID string, cfg RuntimeConfig) (*RoomRuntime, error) {
 		return nil, ErrNilGameModule
 	}
 
-	fmt.Println("THIS GAME TYPE IS", cfg.GameModule.Type())
-
 	now := time.Now().UTC()
 	gameState, err := cfg.GameModule.NewState(now)
 	if err != nil {
 		return nil, fmt.Errorf("create game state: %w", err)
 	}
 	state := NewState(roomID, cfg.GameModule.Type(), gameState, now)
+	return newRuntime(state, cfg, true)
+}
+
+// NewRuntimeFromState restores a runtime without appending another RoomCreated
+// event. Callers must obtain state by replaying the configured event store.
+func NewRuntimeFromState(state RoomState, cfg RuntimeConfig) (*RoomRuntime, error) {
+	if state.RoomID == "" {
+		return nil, ErrEmptyRoomID
+	}
+	if cfg.GameModule == nil {
+		return nil, ErrNilGameModule
+	}
+	if state.GameType != cfg.GameModule.Type() {
+		return nil, fmt.Errorf("restored game type mismatch: state=%d module=%d", state.GameType, cfg.GameModule.Type())
+	}
+	if state.GameState == nil {
+		return nil, fmt.Errorf("restored game state must not be nil")
+	}
+	return newRuntime(state, cfg, false)
+}
+
+func newRuntime(state RoomState, cfg RuntimeConfig, appendCreated bool) (*RoomRuntime, error) {
+	if cfg.InputQueueSize <= 0 {
+		return nil, fmt.Errorf("room input queue size must be positive")
+	}
+	if cfg.SlowConsumerStrikeLimit <= 0 {
+		cfg.SlowConsumerStrikeLimit = 2
+	}
+	if cfg.EventStoreTimeout <= 0 {
+		cfg.EventStoreTimeout = 5 * time.Second
+	}
 	runtime := &RoomRuntime{
 		state:       state,
 		input:       make(chan RuntimeCommand, cfg.InputQueueSize),
@@ -99,8 +129,10 @@ func NewRuntime(roomID string, cfg RuntimeConfig) (*RoomRuntime, error) {
 			return time.Now().UTC()
 		},
 	}
-	if err := runtime.appendEvent(NewRoomCreatedEvent(state)); err != nil {
-		return nil, err
+	if appendCreated {
+		if err := runtime.appendEvent(NewRoomCreatedEvent(state)); err != nil {
+			return nil, err
+		}
 	}
 	return runtime, nil
 }
@@ -356,11 +388,16 @@ func (r *RoomRuntime) join(sink PlayerSink) error {
 	if err != nil {
 		return fmt.Errorf("game player joined: %w", err)
 	}
-	r.state.GameState = gameState
-	r.state.UpdatedAt = r.clock()
+	nextState := r.state
+	nextState.GameState = gameState
+	nextState.UpdatedAt = r.clock()
+	if err := r.appendEvent(NewPlayerJoinedEvent(nextState, playerID, nextState.UpdatedAt)); err != nil {
+		return err
+	}
+	r.state = nextState
 	r.subscribers[playerID] = sink
 	r.slowStrikes[playerID] = 0
-	return r.appendEvent(NewPlayerJoinedEvent(r.state, playerID, r.clock()))
+	return nil
 }
 
 func (r *RoomRuntime) leave(sink PlayerSink, reason string) error {
@@ -519,7 +556,9 @@ func (r *RoomRuntime) appendEvent(event RoomEvent) error {
 	if r.eventStore == nil {
 		return nil
 	}
-	if _, err := r.eventStore.Append(context.Background(), event); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), r.cfg.EventStoreTimeout)
+	defer cancel()
+	if _, err := r.eventStore.Append(ctx, event); err != nil {
 		return fmt.Errorf("append room event: %w", err)
 	}
 	return nil

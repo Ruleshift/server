@@ -1,0 +1,72 @@
+{
+  "format": 1,
+  "restore": {
+    "c:\\Users\\victo\\Ruleshift\\server\\sdk\\dotnet\\Ruleshift.Developer\\Ruleshift.Developer.csproj": {}
+  },
+  "projects": {
+    "c:\\Users\\victo\\Ruleshift\\server\\sdk\\dotnet\\Ruleshift.Developer\\Ruleshift.Developer.csproj": {
+      "version": "0.1.0",
+      "restore": {
+        "projectUniqueName": "c:\\Users\\victo\\Ruleshift\\server\\sdk\\dotnet\\Ruleshift.Developer\\Ruleshift.Developer.csproj",
+        "projectName": "Ruleshift.Developer",
+        "projectPath": "c:\\Users\\victo\\Ruleshift\\server\\sdk\\dotnet\\Ruleshift.Developer\\Ruleshift.Developer.csproj",
+        "packagesPath": "C:\\Users\\victo\\.nuget\\packages\\",
+        "outputPath": "c:\\Users\\victo\\Ruleshift\\server\\sdk\\dotnet\\Ruleshift.Developer\\obj\\",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "C:\\Users\\victo\\AppData\\Roaming\\NuGet\\NuGet.Config"
+        ],
+        "originalTargetFrameworks": [
+          "netstandard2.1"
+        ],
+        "sources": {
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "netstandard2.1": {
+            "targetAlias": "netstandard2.1",
+            "projectReferences": {}
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        }
+      },
+      "frameworks": {
+        "netstandard2.1": {
+          "targetAlias": "netstandard2.1",
+          "dependencies": {
+            "Newtonsoft.Json": {
+              "target": "Package",
+              "version": "[13.0.3, )"
+            }
+          },
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "NETStandard.Library": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\8.0.303\\RuntimeIdentifierGraph.json"
+        }
+      }
+    }
+  }
+}

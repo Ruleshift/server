@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ruleshift
+      POSTGRES_PASSWORD: ruleshift-dev
+      POSTGRES_DB: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ruleshift -d postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "5432:5432"
+    volumes:
+      - ruleshift-postgres:/var/lib/postgresql/data
+
+  gateway:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      RULESHIFT_ADDR: ":8080"
+      RULESHIFT_ENV: dev
+      RULESHIFT_DATABASE_URL: "postgres://ruleshift:ruleshift-dev@postgres:5432/ruleshift_default?sslmode=disable"
+      RULESHIFT_DATABASE_ADMIN_URL: "postgres://ruleshift:ruleshift-dev@postgres:5432/postgres?sslmode=disable"
+      RULESHIFT_DEVELOPER_ID: default
+      RULESHIFT_DEVELOPER_NAME: "Default developer"
+      RULESHIFT_DEVELOPER_API_KEY: "ruleshift-dev-key-change-me"
+    ports:
+      - "8080:8080"
+
+volumes:
+  ruleshift-postgres:

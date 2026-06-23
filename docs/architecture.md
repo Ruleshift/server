@@ -126,7 +126,19 @@ Event types are:
 - `SnapshotSent`
 - `PlayerDisconnected`
 
-Replay starts from `RoomCreated`, applies `PlayerJoined` to restore module seating, then reapplies mutating game events through the same module contract. Snapshot and disconnect events remain audit trail entries. This restores the authoritative `RoomState` and revision without trusting client state. The current implementation is intentionally in-memory for interview clarity; a file-backed or durable store can be added behind the same `EventStore` interface later.
+Replay starts from `RoomCreated`, applies `PlayerJoined` to restore module seating, then reapplies mutating game events through the same module contract. Snapshot and disconnect events remain audit trail entries. This restores the authoritative `RoomState` and revision without trusting client state.
+
+With `RULESHIFT_DATABASE_URL` configured, PostgreSQL implements `EventStore`. Each accepted event and its `rooms` / `room_players` projection update commit in one database transaction. `RoomRegistry` loads and replays existing events before starting a missing in-process runtime. Without database configuration the gateway uses `InMemoryEventStore`.
+
+### SaaS Database Isolation
+
+The default control database owns developers, registered modules, users, and provider identities. Each developer/module pair receives its own PostgreSQL database containing the generic room schema and module-specific migrations. A module opts in through `game.DatabaseModule`; Xiangqi demonstrates both a custom schema migration and a typed command payload codec. See [database.md](database.md) for schema and provisioning details.
+
+### Developer Service API
+
+When PostgreSQL and `RULESHIFT_DEVELOPER_API_KEY` are configured, the gateway exposes `/v1/developer/*`. This tenant-scoped API lets trusted editor, CI, or backend tools provision a module from a bounded declarative schema, inspect its effective schema, and create or page through rows. It never returns database credentials, accepts no arbitrary SQL, caps row pages, and rejects writes to platform-owned room/event tables.
+
+The public Go package in `pkg/ruleshift`, the Unity UPM package in `sdk/unity/com.ruleshift.developer`, and the NuGet project in `sdk/dotnet/Ruleshift.Developer` all use this HTTP contract. Player builds continue to use authenticated protobuf WebSockets and must not contain a developer API key.
 
 ## Non-Goals For MVP
 

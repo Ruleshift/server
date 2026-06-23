@@ -1,0 +1,5 @@
+is_global = true
+build_property.RootNamespace = Ruleshift.Developer
+build_property.ProjectDir = c:\Users\victo\Ruleshift\server\sdk\dotnet\Ruleshift.Developer\
+build_property.EnableComHosting = 
+build_property.EnableGeneratedComInterfaceComImportInterop = 

@@ -58,12 +58,12 @@ func (testGameModule) Apply(state any, command game.Command) (any, game.Delta, e
 	if !ok {
 		return state, game.Delta{}, game.ErrInvalidCommand
 	}
-	testState.moves++
+	nextState := &testGameState{moves: testState.moves + 1}
 	base := game.Delta{
 		Type:        game.TypeXiangqi,
 		CommandType: game.CommandDoMove,
 		Status:      game.StatusActive,
-		StateHash:   testState.moves,
+		StateHash:   nextState.moves,
 	}
 	base.CommandPayload = move
 	base.Payload = xiangqi.Delta{
@@ -72,9 +72,9 @@ func (testGameModule) Apply(state any, command game.Command) (any, game.Delta, e
 		FromSquare: move.FromSquare,
 		ToSquare:   move.ToSquare,
 		SquareUpdates: []xiangqi.SquareUpdate{
-			{Square: move.FromSquare, Piece: uint32(testState.moves)},
+			{Square: move.FromSquare, Piece: uint32(nextState.moves)},
 		},
 		SideToMove: xiangqi.SideRed,
 	}
-	return testState, base, nil
+	return nextState, base, nil
 }

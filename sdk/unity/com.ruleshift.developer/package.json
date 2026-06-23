@@ -1,0 +1,13 @@
+{
+  "name": "com.ruleshift.developer",
+  "version": "0.1.0",
+  "displayName": "Ruleshift Developer SDK",
+  "description": "Editor-only SDK for provisioning and inspecting Ruleshift game modules through the developer API.",
+  "unity": "2022.3",
+  "author": {
+    "name": "Ruleshift"
+  },
+  "dependencies": {
+    "com.unity.nuget.newtonsoft-json": "3.2.1"
+  }
+}

@@ -36,3 +36,12 @@ func TestLoadRejectsInvalidDuration(t *testing.T) {
 		t.Fatal("Load returned nil error for invalid duration")
 	}
 }
+
+func TestLoadRejectsDeveloperAPIWithoutDatabase(t *testing.T) {
+	t.Setenv("RULESHIFT_DATABASE_URL", "")
+	t.Setenv("RULESHIFT_DEVELOPER_API_KEY", "secret")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load returned nil error for developer API without database")
+	}
+}

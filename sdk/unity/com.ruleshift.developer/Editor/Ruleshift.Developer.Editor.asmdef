@@ -1,0 +1,11 @@
+{
+  "name": "Ruleshift.Developer.Editor",
+  "rootNamespace": "Ruleshift.Developer",
+  "references": [
+    "Unity.Newtonsoft.Json"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "autoReferenced": true
+}

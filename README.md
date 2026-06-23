@@ -42,6 +42,10 @@ Implemented in this iteration:
 - WebSocket gateway on `/ws` using Gorilla WebSocket with binary protobuf envelopes, mock auth, join room, snapshots, `DoMove`/`Resign`/`OfferDraw` commands, delta broadcast, app-level ping/pong, and basic client sequence checks.
 - Reconnect/resume for rooms: `JoinRoomRequest.last_seen_revision` is compared with the authoritative room revision, stale clients receive a `StateSnapshot`, and reconnecting with the same authenticated `player_id` replaces the old session.
 - Append-only room event log with sequence-numbered `RoomEvent` records, `InMemoryEventStore`, and replay that restores game state by reapplying module commands.
+- PostgreSQL control database for SaaS developers, module registrations, users, and provider identities.
+- Automatically provisioned database per developer/module, with immutable module-owned migrations, durable room/member projections, room events, and restart recovery.
+- Authenticated developer REST API with declarative module schemas and bounded table reads/writes; raw SQL and PostgreSQL credentials stay server-side.
+- Go client package and Editor-only Unity Package Manager SDK for using Ruleshift locally or as a hosted service.
 - Unity-compatible C# network skeleton with `MatchClient`, `ProtocolCodec`, mock auth tickets, generated protobuf bindings, and reconnect using `lastSeenRevision`.
 - Protobuf schema in `internal/protocol/proto/ruleshift.proto`.
 - Generated Go and C# protobuf bindings.
@@ -53,7 +57,7 @@ Implemented in this iteration:
 Not implemented yet:
 
 - Public matchmaking HTTP/protobuf API handlers wired into `cmd/gateway`.
-- Durable game/build registry and durable matchmaking/session storage.
+- Durable game/build registry and durable matchmaking/session storage (room and identity persistence are implemented).
 - Real game server launcher or container allocator.
 - Full Prometheus metrics and pprof endpoints.
 - Bot load execution against the gateway.
@@ -66,6 +70,8 @@ go test ./...
 go run ./cmd/botload
 go run ./cmd/gateway
 ```
+
+For PostgreSQL-backed local startup, use `docker compose up --build`. Game developers then use `http://localhost:8080` through the Go or Unity SDK. See [docs/developer-api.md](docs/developer-api.md).
 
 The gateway defaults to `:8080`.
 
@@ -81,6 +87,10 @@ Invoke-WebRequest http://localhost:8080/healthz
 Invoke-WebRequest http://localhost:8080/readyz
 Invoke-WebRequest http://localhost:8080/metrics
 ```
+
+Developer service API: `http://localhost:8080/v1/developer/`. Its OpenAPI contract is [api/developer.openapi.yaml](api/developer.openapi.yaml); SDK usage is documented in [docs/developer-api.md](docs/developer-api.md).
+
+Step-by-step module authoring, including a complete authoritative reducer example, is documented in [docs/module-development.md](docs/module-development.md).
 
 Docker VPS deploy notes: [docs/vps-deploy.md](docs/vps-deploy.md).
 
@@ -119,6 +129,12 @@ Environment variables:
 | --- | --- | --- |
 | `RULESHIFT_ADDR` | `:8080` | HTTP gateway listen address |
 | `RULESHIFT_ENV` | `dev` | Environment label for logs |
+| `RULESHIFT_DATABASE_URL` | empty | Control/default PostgreSQL URL; empty keeps in-memory mode |
+| `RULESHIFT_DATABASE_ADMIN_URL` | derived from database URL | PostgreSQL provisioning URL with `CREATEDB` |
+| `RULESHIFT_MODULE_DATABASE_PREFIX` | `ruleshift_module_` | Prefix for per-developer/module databases |
+| `RULESHIFT_DEVELOPER_ID` | `default` | Safe tenant identifier used in module database names |
+| `RULESHIFT_DEVELOPER_NAME` | `Default developer` | Tenant display name in the control database |
+| `RULESHIFT_DEVELOPER_API_KEY` | empty | Bearer key enabling the tenant-scoped developer API; requires PostgreSQL |
 | `RULESHIFT_MAX_MESSAGE_BYTES` | `65536` | Max protobuf WebSocket payload size |
 | `RULESHIFT_ROOM_INPUT_QUEUE_SIZE` | `1024` | Bounded per-room command queue size |
 | `RULESHIFT_SESSION_SEND_QUEUE_SIZE` | `256` | Bounded per-session send queue size |

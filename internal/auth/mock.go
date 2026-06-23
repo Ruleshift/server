@@ -31,6 +31,7 @@ func (p *MockProvider) AuthenticateTicket(ctx context.Context, ticket string) (*
 
 	return &Identity{
 		PlayerID:          playerID,
+		Provider:          "mock",
 		DisplayName:       playerID,
 		AppID:             "local",
 		OwnershipVerified: true,

@@ -12,9 +12,11 @@ import (
 
 	"github.com/Ruleshift/server/internal/auth"
 	"github.com/Ruleshift/server/internal/config"
+	"github.com/Ruleshift/server/internal/developerapi"
 	"github.com/Ruleshift/server/internal/game/xiangqi"
 	"github.com/Ruleshift/server/internal/gateway"
 	"github.com/Ruleshift/server/internal/room"
+	storagepostgres "github.com/Ruleshift/server/internal/storage/postgres"
 )
 
 func main() {
@@ -28,10 +30,48 @@ func main() {
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	authProvider := auth.NewMockProvider()
+	gameModule := xiangqi.NewModule()
+	var authProvider auth.Provider = auth.NewMockProvider()
+	var eventStore room.EventStore = room.NewInMemoryEventStore()
+	var platform *storagepostgres.Platform
+	var developerAPI http.Handler
+	if cfg.DatabaseURL != "" {
+		platform, err = storagepostgres.Open(ctx, storagepostgres.Config{
+			ControlURL:           cfg.DatabaseURL,
+			AdminURL:             cfg.DatabaseAdminURL,
+			ModuleDatabasePrefix: cfg.ModuleDatabasePrefix,
+			DeveloperID:          cfg.DeveloperID,
+			DeveloperName:        cfg.DeveloperName,
+		})
+		if err != nil {
+			logger.Error("open platform database", "error", err)
+			os.Exit(1)
+		}
+		defer platform.Close()
+
+		moduleStore, provisionErr := platform.ProvisionModule(ctx, gameModule)
+		if provisionErr != nil {
+			logger.Error("provision module database", "module", gameModule.DatabaseDefinition().Name, "error", provisionErr)
+			os.Exit(1)
+		}
+		eventStore = moduleStore
+		authProvider = auth.NewPersistingProvider(authProvider, platform)
+		if cfg.DeveloperAPIKey != "" {
+			if err := platform.EnsureDeveloperAPIKey(ctx, cfg.DeveloperID, "bootstrap", cfg.DeveloperAPIKey); err != nil {
+				logger.Error("bootstrap developer API key", "error", err)
+				os.Exit(1)
+			}
+			developerAPI, err = developerapi.New(platform)
+			if err != nil {
+				logger.Error("create developer API", "error", err)
+				os.Exit(1)
+			}
+		}
+	}
 	registry := room.NewRegistry(room.RuntimeConfig{
 		InputQueueSize: cfg.RoomInputQueueSize,
-		GameModule:     xiangqi.NewModule(),
+		EventStore:     eventStore,
+		GameModule:     gameModule,
 	})
 	gatewayHandler, err := gateway.New(gateway.Config{
 		MaxMessageBytes:      cfg.MaxMessageBytes,
@@ -50,6 +90,9 @@ func main() {
 	if cfg.EnableMetrics {
 		mux.HandleFunc("/metrics", metricsHandler(registry))
 	}
+	if developerAPI != nil {
+		mux.Handle("/v1/developer/", developerAPI)
+	}
 	mux.HandleFunc(gateway.WebSocketPath, gatewayHandler.HandleWebSocket)
 
 	server := &http.Server{
@@ -66,6 +109,8 @@ func main() {
 		"env", cfg.Env,
 		"auth_provider", fmt.Sprintf("%T", authProvider),
 		"room_count", registry.RoomCount(),
+		"database_enabled", cfg.DatabaseURL != "",
+		"developer_api_enabled", developerAPI != nil,
 	)
 
 	go func() {

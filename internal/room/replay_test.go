@@ -72,3 +72,50 @@ func TestReplayEventsRestoresGameStateFromEventLog(t *testing.T) {
 		t.Fatalf("replayed state = hash %d revision %d, want 3/3", replayedSnapshot.Game.StateHash, replayed.Revision)
 	}
 }
+
+func TestRegistryRestoresRoomFromEventStore(t *testing.T) {
+	store := NewInMemoryEventStore()
+	module := testGameModule{}
+	first, cancelFirst, firstDone := startTestRuntimeWithConfig(t, RuntimeConfig{
+		InputQueueSize: 16,
+		EventStore:     store,
+		GameModule:     module,
+	})
+
+	ctx, cancelCtx := context.WithTimeout(context.Background(), time.Second)
+	defer cancelCtx()
+	if _, err := first.Submit(ctx, GameCommand{
+		RoomID:   "room-1",
+		PlayerID: "player-1",
+		Type:     game.CommandDoMove,
+		Payload:  xiangqi.Move{UCI: "a0a1"},
+	}); err != nil {
+		t.Fatalf("first Submit returned error: %v", err)
+	}
+	stopTestRuntime(t, cancelFirst, firstDone)
+
+	registry := NewRegistry(RuntimeConfig{
+		InputQueueSize: 16,
+		EventStore:     store,
+		GameModule:     module,
+	})
+	restored, created, err := registry.GetOrCreate("room-1")
+	if err != nil {
+		t.Fatalf("GetOrCreate returned error: %v", err)
+	}
+	if !created {
+		t.Fatal("restored runtime should be newly installed in the registry")
+	}
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- restored.Run(runCtx) }()
+	defer stopTestRuntime(t, cancelRun, done)
+
+	snapshot, err := restored.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("restored Snapshot returned error: %v", err)
+	}
+	if snapshot.Revision != 1 || snapshot.Game.StateHash != 1 {
+		t.Fatalf("restored snapshot = revision %d hash %d, want 1/1", snapshot.Revision, snapshot.Game.StateHash)
+	}
+}
