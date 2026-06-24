@@ -31,24 +31,6 @@ namespace Ruleshift.Developer
             _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         }
 
-        public Task<ModuleInfo> CreateModuleAsync(CreateModuleRequest request, CancellationToken cancellationToken = default)
-        {
-            if (request == null) throw new ArgumentNullException(nameof(request));
-            return SendAsync<ModuleInfo>(HttpMethod.Post, "v1/developer/modules", request, cancellationToken);
-        }
-
-        public async Task<IReadOnlyList<ModuleInfo>> ListModulesAsync(CancellationToken cancellationToken = default)
-        {
-            var response = await SendAsync<ModuleList>(HttpMethod.Get, "v1/developer/modules", null, cancellationToken);
-            return response.Modules;
-        }
-
-        public Task<ModuleSchemaInfo> GetSchemaAsync(string moduleKey, CancellationToken cancellationToken = default)
-        {
-            return SendAsync<ModuleSchemaInfo>(HttpMethod.Get,
-                $"v1/developer/modules/{Escape(moduleKey)}/schema", null, cancellationToken);
-        }
-
         public Task<RowsPage> ListRowsAsync(
             string moduleKey,
             string table,
@@ -56,7 +38,7 @@ namespace Ruleshift.Developer
             int offset = 0,
             CancellationToken cancellationToken = default)
         {
-            var path = $"v1/developer/modules/{Escape(moduleKey)}/tables/{Escape(table)}/rows?limit={limit}&offset={offset}";
+            var path = $"v2/developer/modules/{Escape(moduleKey)}/tables/{Escape(table)}/rows?limit={limit}&offset={offset}";
             return SendAsync<RowsPage>(HttpMethod.Get, path, null, cancellationToken);
         }
 
@@ -66,8 +48,53 @@ namespace Ruleshift.Developer
             Dictionary<string, object> values,
             CancellationToken cancellationToken = default)
         {
-            var path = $"v1/developer/modules/{Escape(moduleKey)}/tables/{Escape(table)}/rows";
+            var path = $"v2/developer/modules/{Escape(moduleKey)}/tables/{Escape(table)}/rows";
             return SendAsync<RowInfo>(HttpMethod.Post, path, new CreateRowRequest { Values = values }, cancellationToken);
+        }
+
+        public async Task<ModuleVersionInfo> PublishModuleVersionAsync(
+            PublishModuleVersionRequest value,
+            CancellationToken cancellationToken = default)
+        {
+            if (value == null) throw new ArgumentNullException(nameof(value));
+            using var content = new MultipartFormDataContent();
+            content.Add(new StringContent(JsonConvert.SerializeObject(value.Manifest), Encoding.UTF8, "application/json"), "manifest");
+            content.Add(new ByteArrayContent(value.DescriptorSet ?? Array.Empty<byte>()), "descriptor_set", "descriptor.pb");
+            content.Add(new ByteArrayContent(value.ConformanceVectors ?? Array.Empty<byte>()), "conformance_vectors", "vectors.json");
+            content.Add(new StringContent(value.OciReference ?? string.Empty), "oci_reference");
+            if (!string.IsNullOrWhiteSpace(value.RegistryCredential))
+                content.Add(new StringContent(value.RegistryCredential), "registry_credential");
+            return await SendContentAsync<ModuleVersionInfo>(HttpMethod.Post,
+                $"v2/developer/modules/{Escape(value.ModuleId)}/versions", content, cancellationToken);
+        }
+
+        public Task<RuntimeModuleInfo> CreateRuntimeModuleAsync(string key, string displayName, CancellationToken cancellationToken = default)
+        {
+            return SendAsync<RuntimeModuleInfo>(HttpMethod.Post, "v2/developer/modules",
+                new { key, display_name = displayName }, cancellationToken);
+        }
+
+        public Task<ModuleVersionInfo> GetModuleVersionAsync(string moduleId, string version, CancellationToken cancellationToken = default)
+        {
+            return SendAsync<ModuleVersionInfo>(HttpMethod.Get,
+                $"v2/developer/modules/{Escape(moduleId)}/versions/{Escape(version)}", null, cancellationToken);
+        }
+
+        public Task<ValidationStatusInfo> GetValidationStatusAsync(string moduleId, string version, CancellationToken cancellationToken = default)
+        {
+            return SendAsync<ValidationStatusInfo>(HttpMethod.Get,
+                $"v2/developer/modules/{Escape(moduleId)}/versions/{Escape(version)}/validation", null, cancellationToken);
+        }
+
+        public Task<RoomInfo> CreateRoomAsync(string moduleId, string version = null, CancellationToken cancellationToken = default)
+        {
+            return SendAsync<RoomInfo>(HttpMethod.Post, "v2/rooms",
+                new CreateRoomV2Request { ModuleId = moduleId, Version = version }, cancellationToken);
+        }
+
+        public Task<RoomInfo> GetRoomAsync(string roomId, CancellationToken cancellationToken = default)
+        {
+            return SendAsync<RoomInfo>(HttpMethod.Get, $"v2/rooms/{Escape(roomId)}", null, cancellationToken);
         }
 
         public void Dispose()
@@ -96,6 +123,19 @@ namespace Ruleshift.Developer
                 throw new RuleshiftApiException(response.StatusCode, error?.Code, error?.Message);
             }
 
+            return JsonConvert.DeserializeObject<T>(payload);
+        }
+
+        private async Task<T> SendContentAsync<T>(HttpMethod method, string path, HttpContent content, CancellationToken cancellationToken)
+        {
+            using var request = new HttpRequestMessage(method, path) { Content = content };
+            using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken);
+            var payload = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+            {
+                var error = JsonConvert.DeserializeObject<ApiError>(payload);
+                throw new RuleshiftApiException(response.StatusCode, error?.Code, error?.Message);
+            }
             return JsonConvert.DeserializeObject<T>(payload);
         }
 
@@ -129,65 +169,6 @@ namespace Ruleshift.Developer
         public const string Json = "json";
     }
 
-    public sealed class CreateModuleRequest
-    {
-        [JsonProperty("key")] public string Key { get; set; }
-        [JsonProperty("display_name")] public string DisplayName { get; set; }
-        [JsonProperty("schema")] public ModuleSchema Schema { get; set; } = new ModuleSchema();
-    }
-
-    public sealed class ModuleSchema
-    {
-        [JsonProperty("tables")] public List<TableDefinition> Tables { get; set; } = new List<TableDefinition>();
-    }
-
-    public sealed class TableDefinition
-    {
-        [JsonProperty("name")] public string Name { get; set; }
-        [JsonProperty("columns")] public List<ColumnDefinition> Columns { get; set; } = new List<ColumnDefinition>();
-    }
-
-    public sealed class ColumnDefinition
-    {
-        [JsonProperty("name")] public string Name { get; set; }
-        [JsonProperty("type")] public string Type { get; set; }
-        [JsonProperty("nullable")] public bool Nullable { get; set; }
-        [JsonProperty("primary_key")] public bool PrimaryKey { get; set; }
-    }
-
-    public sealed class ModuleInfo
-    {
-        [JsonProperty("key")] public string Key { get; set; }
-        [JsonProperty("display_name")] public string DisplayName { get; set; }
-        [JsonProperty("game_type")] public byte GameType { get; set; }
-        [JsonProperty("created_at")] public DateTimeOffset CreatedAt { get; set; }
-    }
-
-    public sealed class ModuleList
-    {
-        [JsonProperty("modules")] public List<ModuleInfo> Modules { get; set; } = new List<ModuleInfo>();
-    }
-
-    public sealed class ModuleSchemaInfo
-    {
-        [JsonProperty("module")] public string Module { get; set; }
-        [JsonProperty("tables")] public List<TableSchemaInfo> Tables { get; set; } = new List<TableSchemaInfo>();
-    }
-
-    public sealed class TableSchemaInfo
-    {
-        [JsonProperty("name")] public string Name { get; set; }
-        [JsonProperty("columns")] public List<ColumnSchemaInfo> Columns { get; set; } = new List<ColumnSchemaInfo>();
-    }
-
-    public sealed class ColumnSchemaInfo
-    {
-        [JsonProperty("name")] public string Name { get; set; }
-        [JsonProperty("sql_type")] public string SqlType { get; set; }
-        [JsonProperty("nullable")] public bool Nullable { get; set; }
-        [JsonProperty("primary_key")] public bool PrimaryKey { get; set; }
-    }
-
     public sealed class RowsPage
     {
         [JsonProperty("module")] public string Module { get; set; }
@@ -208,6 +189,96 @@ namespace Ruleshift.Developer
         [JsonProperty("module")] public string Module { get; set; }
         [JsonProperty("table")] public string Table { get; set; }
         [JsonProperty("values")] public Dictionary<string, JToken> Values { get; set; } = new Dictionary<string, JToken>();
+    }
+
+    public sealed class PublishModuleVersionRequest
+    {
+        public string ModuleId { get; set; }
+        public string OciReference { get; set; }
+        public string RegistryCredential { get; set; }
+        public RuntimeManifest Manifest { get; set; }
+        public byte[] DescriptorSet { get; set; }
+        public byte[] ConformanceVectors { get; set; }
+    }
+
+    public sealed class RuntimeManifest
+    {
+        [JsonProperty("module_id")] public string ModuleId { get; set; }
+        [JsonProperty("version")] public string Version { get; set; }
+        [JsonProperty("abi_version")] public uint AbiVersion { get; set; } = 1;
+        [JsonProperty("state_type_url")] public string StateTypeUrl { get; set; }
+        [JsonProperty("command_type_urls")] public List<string> CommandTypeUrls { get; set; } = new List<string>();
+        [JsonProperty("transition_deadline_ms")] public int TransitionDeadlineMs { get; set; }
+        [JsonProperty("capabilities")] public List<string> Capabilities { get; set; } = new List<string>();
+        [JsonProperty("database_migrations")] public List<DatabaseMigration> DatabaseMigrations { get; set; } = new List<DatabaseMigration>();
+    }
+
+    public sealed class DatabaseMigration
+    {
+        [JsonProperty("version")] public ulong Version { get; set; }
+        [JsonProperty("name")] public string Name { get; set; }
+        [JsonProperty("tables")] public List<TableDefinition> Tables { get; set; } = new List<TableDefinition>();
+    }
+
+    public sealed class TableDefinition
+    {
+        [JsonProperty("name")] public string Name { get; set; }
+        [JsonProperty("columns")] public List<ColumnDefinition> Columns { get; set; } = new List<ColumnDefinition>();
+    }
+
+    public sealed class ColumnDefinition
+    {
+        [JsonProperty("name")] public string Name { get; set; }
+        [JsonProperty("type")] public string Type { get; set; }
+        [JsonProperty("nullable")] public bool Nullable { get; set; }
+        [JsonProperty("primary_key")] public bool PrimaryKey { get; set; }
+    }
+
+    public sealed class ModuleReferenceInfo
+    {
+        [JsonProperty("developer_id")] public string DeveloperId { get; set; }
+        [JsonProperty("module_id")] public string ModuleId { get; set; }
+        [JsonProperty("version")] public string Version { get; set; }
+        [JsonProperty("image_digest")] public string ImageDigest { get; set; }
+    }
+
+    public sealed class ModuleVersionInfo
+    {
+        [JsonProperty("ref")] public ModuleReferenceInfo Ref { get; set; }
+        [JsonProperty("image_ref")] public string ImageRef { get; set; }
+        [JsonProperty("status")] public string Status { get; set; }
+        [JsonProperty("descriptor_digest")] public string DescriptorDigest { get; set; }
+        [JsonProperty("manifest")] public RuntimeManifest Manifest { get; set; }
+    }
+
+    public sealed class RuntimeModuleInfo
+    {
+        [JsonProperty("developer_id")] public string DeveloperId { get; set; }
+        [JsonProperty("key")] public string Key { get; set; }
+        [JsonProperty("display_name")] public string DisplayName { get; set; }
+        [JsonProperty("active_version")] public string ActiveVersion { get; set; }
+    }
+
+    public sealed class ValidationStatusInfo
+    {
+        [JsonProperty("result")] public string Result { get; set; }
+        [JsonProperty("logs")] public string Logs { get; set; }
+        [JsonProperty("started_at")] public DateTimeOffset StartedAt { get; set; }
+        [JsonProperty("finished_at")] public DateTimeOffset? FinishedAt { get; set; }
+    }
+
+    public sealed class CreateRoomV2Request
+    {
+        [JsonProperty("module_id")] public string ModuleId { get; set; }
+        [JsonProperty("version")] public string Version { get; set; }
+    }
+
+    public sealed class RoomInfo
+    {
+        [JsonProperty("room_id")] public string RoomId { get; set; }
+        [JsonProperty("module")] public ModuleReferenceInfo Module { get; set; }
+        [JsonProperty("module_database")] public string ModuleDatabase { get; set; }
+        [JsonProperty("seed")] public ulong Seed { get; set; }
     }
 
     internal sealed class ApiError

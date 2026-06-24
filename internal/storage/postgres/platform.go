@@ -10,7 +10,6 @@ import (
 	"sync"
 
 	"github.com/Ruleshift/server/internal/auth"
-	"github.com/Ruleshift/server/internal/game"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 )
@@ -104,66 +103,6 @@ func Open(ctx context.Context, cfg Config) (*Platform, error) {
 	return platform, nil
 }
 
-func (p *Platform) ProvisionModule(ctx context.Context, module game.DatabaseModule) (*EventStore, error) {
-	definition := module.DatabaseDefinition()
-	db, err := p.provisionDefinition(ctx, p.cfg.DeveloperID, module.Type(), definition.Name, definition)
-	if err != nil {
-		return nil, err
-	}
-	return NewEventStore(db, module), nil
-}
-
-// ProvisionDefinition creates an isolated database for a data-only developer
-// module. Game runtime modules use ProvisionModule so their payload codec is also
-// attached to the authoritative room event store.
-func (p *Platform) ProvisionDefinition(ctx context.Context, developerID, displayName string, definition game.DatabaseDefinition) error {
-	_, err := p.provisionDefinition(ctx, developerID, game.TypeUnspecified, displayName, definition)
-	return err
-}
-
-func (p *Platform) provisionDefinition(ctx context.Context, developerID string, gameType game.Type, displayName string, definition game.DatabaseDefinition) (*sql.DB, error) {
-	if !definitionNamePattern.MatchString(developerID) {
-		return nil, fmt.Errorf("developer id %q must match %s", developerID, definitionNamePattern)
-	}
-	if err := validateDefinition(definition); err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(displayName) == "" {
-		displayName = definition.Name
-	}
-	databaseName, err := moduleDatabaseName(p.cfg.ModuleDatabasePrefix, developerID, definition.Name)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := ensureDatabase(ctx, p.admin, databaseName); err != nil {
-		return nil, fmt.Errorf("ensure module database %q: %w", databaseName, err)
-	}
-	moduleURL, err := databaseURL(p.controlURL, databaseName)
-	if err != nil {
-		return nil, err
-	}
-	db, err := p.openModuleDatabase(ctx, databaseName, moduleURL)
-	if err != nil {
-		return nil, fmt.Errorf("open module database %q: %w", databaseName, err)
-	}
-
-	baseMigrations, err := embeddedMigrations("migrations/module")
-	if err == nil {
-		err = applyMigrations(ctx, db, "ruleshift_module", baseMigrations)
-	}
-	if err == nil {
-		err = applyMigrations(ctx, db, definition.Name, definition.Migrations)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("migrate module database %q: %w", databaseName, err)
-	}
-	if err := p.registerModule(ctx, developerID, gameType, displayName, definition, databaseName); err != nil {
-		return nil, err
-	}
-	return db, nil
-}
-
 func (p *Platform) SaveIdentity(ctx context.Context, identity auth.Identity) error {
 	if identity.PlayerID == "" {
 		return fmt.Errorf("identity player id must not be empty")
@@ -236,23 +175,6 @@ ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, updated_at 
 		p.cfg.DeveloperID, p.cfg.DeveloperName)
 	if err != nil {
 		return fmt.Errorf("upsert default developer: %w", err)
-	}
-	return nil
-}
-
-func (p *Platform) registerModule(ctx context.Context, developerID string, gameType game.Type, displayName string, definition game.DatabaseDefinition, databaseName string) error {
-	moduleID := developerID + ":" + definition.Name
-	_, err := p.control.ExecContext(ctx, `
-INSERT INTO modules(id, developer_id, module_key, display_name, game_type, database_name)
-VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (developer_id, module_key) DO UPDATE SET
-    display_name = EXCLUDED.display_name,
-    game_type = EXCLUDED.game_type,
-    database_name = EXCLUDED.database_name,
-    updated_at = NOW()`,
-		moduleID, developerID, definition.Name, displayName, int16(gameType), databaseName)
-	if err != nil {
-		return fmt.Errorf("register module %q: %w", definition.Name, err)
 	}
 	return nil
 }

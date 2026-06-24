@@ -3,8 +3,6 @@ package postgres
 import (
 	"strings"
 	"testing"
-
-	"github.com/Ruleshift/server/internal/game"
 )
 
 func TestEmbeddedSchemasAreValid(t *testing.T) {
@@ -22,18 +20,10 @@ func TestEmbeddedSchemasAreValid(t *testing.T) {
 	}
 }
 
-func TestValidateDefinitionRejectsUnsafeNameAndDuplicateVersions(t *testing.T) {
-	tests := []game.DatabaseDefinition{
-		{Name: "bad-name"},
-		{Name: "xiangqi", Migrations: []game.DatabaseMigration{
-			{Version: 1, Name: "first", SQL: "SELECT 1"},
-			{Version: 1, Name: "duplicate", SQL: "SELECT 2"},
-		}},
-	}
-	for _, definition := range tests {
-		if err := validateDefinition(definition); err == nil {
-			t.Fatalf("validateDefinition(%#v) returned nil error", definition)
-		}
+func TestValidateMigrationsRejectsDuplicateVersions(t *testing.T) {
+	migrations := []databaseMigration{{Version: 1, Name: "first", SQL: "SELECT 1"}, {Version: 1, Name: "duplicate", SQL: "SELECT 2"}}
+	if err := validateMigrations(migrations); err == nil {
+		t.Fatal("duplicate migration version accepted")
 	}
 }
 

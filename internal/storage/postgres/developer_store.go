@@ -18,108 +18,9 @@ var (
 
 var platformManagedModuleTables = map[string]struct{}{
 	"rooms":                       {},
-	"room_players":                {},
 	"room_events":                 {},
+	"room_snapshots":              {},
 	"ruleshift_schema_migrations": {},
-}
-
-func (p *Platform) ListModules(ctx context.Context, developerID string) ([]ruleshift.Module, error) {
-	rows, err := p.control.QueryContext(ctx, `
-SELECT module_key, display_name, game_type, created_at
-FROM modules
-WHERE developer_id = $1
-ORDER BY module_key`, developerID)
-	if err != nil {
-		return nil, fmt.Errorf("list developer modules: %w", err)
-	}
-	defer rows.Close()
-
-	modules := make([]ruleshift.Module, 0)
-	for rows.Next() {
-		var module ruleshift.Module
-		var gameType int16
-		if err := rows.Scan(&module.Key, &module.DisplayName, &gameType, &module.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan developer module: %w", err)
-		}
-		if gameType < 0 || gameType > 255 {
-			return nil, fmt.Errorf("module %q has unsupported game type %d", module.Key, gameType)
-		}
-		module.GameType = uint8(gameType)
-		modules = append(modules, module)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate developer modules: %w", err)
-	}
-	return modules, nil
-}
-
-func (p *Platform) GetModule(ctx context.Context, developerID, moduleKey string) (ruleshift.Module, error) {
-	var module ruleshift.Module
-	var gameType int16
-	err := p.control.QueryRowContext(ctx, `
-SELECT module_key, display_name, game_type, created_at
-FROM modules
-WHERE developer_id = $1 AND module_key = $2`, developerID, moduleKey).
-		Scan(&module.Key, &module.DisplayName, &gameType, &module.CreatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ruleshift.Module{}, ErrModuleNotFound
-	}
-	if err != nil {
-		return ruleshift.Module{}, fmt.Errorf("get developer module: %w", err)
-	}
-	if gameType < 0 || gameType > 255 {
-		return ruleshift.Module{}, fmt.Errorf("module %q has unsupported game type %d", module.Key, gameType)
-	}
-	module.GameType = uint8(gameType)
-	return module, nil
-}
-
-func (p *Platform) DescribeModule(ctx context.Context, developerID, moduleKey string) (ruleshift.Schema, error) {
-	module, db, err := p.moduleDatabase(ctx, developerID, moduleKey)
-	if err != nil {
-		return ruleshift.Schema{}, err
-	}
-	rows, err := db.QueryContext(ctx, `
-SELECT c.table_name, c.column_name, c.data_type, c.is_nullable,
-       EXISTS (
-           SELECT 1
-           FROM information_schema.table_constraints tc
-           JOIN information_schema.key_column_usage kcu
-             ON tc.constraint_name = kcu.constraint_name
-            AND tc.table_schema = kcu.table_schema
-          WHERE tc.constraint_type = 'PRIMARY KEY'
-            AND tc.table_schema = c.table_schema
-            AND tc.table_name = c.table_name
-            AND kcu.column_name = c.column_name
-       ) AS primary_key
-FROM information_schema.columns c
-WHERE c.table_schema = 'public'
-ORDER BY c.table_name, c.ordinal_position`)
-	if err != nil {
-		return ruleshift.Schema{}, fmt.Errorf("describe module schema: %w", err)
-	}
-	defer rows.Close()
-
-	schema := ruleshift.Schema{Module: module.Key, Tables: make([]ruleshift.TableSchema, 0)}
-	var current *ruleshift.TableSchema
-	for rows.Next() {
-		var tableName string
-		var column ruleshift.ColumnSchema
-		var nullable string
-		if err := rows.Scan(&tableName, &column.Name, &column.SQLType, &nullable, &column.PrimaryKey); err != nil {
-			return ruleshift.Schema{}, fmt.Errorf("scan module schema: %w", err)
-		}
-		column.Nullable = nullable == "YES"
-		if current == nil || current.Name != tableName {
-			schema.Tables = append(schema.Tables, ruleshift.TableSchema{Name: tableName, Columns: make([]ruleshift.ColumnSchema, 0)})
-			current = &schema.Tables[len(schema.Tables)-1]
-		}
-		current.Columns = append(current.Columns, column)
-	}
-	if err := rows.Err(); err != nil {
-		return ruleshift.Schema{}, fmt.Errorf("iterate module schema: %w", err)
-	}
-	return schema, nil
 }
 
 func (p *Platform) ListTableRows(ctx context.Context, developerID, moduleKey, tableName string, limit, offset int) (ruleshift.RowsPage, error) {
@@ -162,7 +63,7 @@ SELECT EXISTS (
 		return ruleshift.RowsPage{}, fmt.Errorf("read module table columns: %w", err)
 	}
 	page := ruleshift.RowsPage{
-		Module:  module.Key,
+		Module:  module,
 		Table:   tableName,
 		Columns: columns,
 		Rows:    make([]map[string]any, 0, limit),
@@ -279,33 +180,33 @@ WHERE table_schema = 'public' AND table_name = $1`, tableName)
 	if err := rows.Scan(destinations...); err != nil {
 		return ruleshift.Row{}, fmt.Errorf("scan inserted row: %w", err)
 	}
-	result := ruleshift.Row{Module: module.Key, Table: tableName, Values: make(map[string]any, len(columns))}
+	result := ruleshift.Row{Module: module, Table: tableName, Values: make(map[string]any, len(columns))}
 	for i, column := range columns {
 		result.Values[column] = normalizeDatabaseValue(resultValues[i])
 	}
 	return result, nil
 }
 
-func (p *Platform) moduleDatabase(ctx context.Context, developerID, moduleKey string) (ruleshift.Module, *sql.DB, error) {
-	module, err := p.GetModule(ctx, developerID, moduleKey)
-	if err != nil {
-		return ruleshift.Module{}, nil, err
-	}
+func (p *Platform) moduleDatabase(ctx context.Context, developerID, moduleKey string) (string, *sql.DB, error) {
 	var databaseName string
-	if err := p.control.QueryRowContext(ctx, `
+	err := p.control.QueryRowContext(ctx, `
 SELECT database_name FROM modules
-WHERE developer_id = $1 AND module_key = $2`, developerID, moduleKey).Scan(&databaseName); err != nil {
-		return ruleshift.Module{}, nil, fmt.Errorf("get module database location: %w", err)
+WHERE developer_id = $1 AND module_key = $2`, developerID, moduleKey).Scan(&databaseName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil, ErrModuleNotFound
+	}
+	if err != nil {
+		return "", nil, fmt.Errorf("get module database location: %w", err)
 	}
 	moduleURL, err := databaseURL(p.controlURL, databaseName)
 	if err != nil {
-		return ruleshift.Module{}, nil, err
+		return "", nil, err
 	}
 	db, err := p.openModuleDatabase(ctx, databaseName, moduleURL)
 	if err != nil {
-		return ruleshift.Module{}, nil, fmt.Errorf("open module database: %w", err)
+		return "", nil, fmt.Errorf("open module database: %w", err)
 	}
-	return module, db, nil
+	return moduleKey, db, nil
 }
 
 func normalizeDatabaseValue(value any) any {

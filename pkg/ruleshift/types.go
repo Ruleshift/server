@@ -26,40 +26,6 @@ type TableDefinition struct {
 	Columns []ColumnDefinition `json:"columns"`
 }
 
-type ModuleSchema struct {
-	Tables []TableDefinition `json:"tables"`
-}
-
-type CreateModuleRequest struct {
-	Key         string       `json:"key"`
-	DisplayName string       `json:"display_name"`
-	Schema      ModuleSchema `json:"schema"`
-}
-
-type Module struct {
-	Key         string    `json:"key"`
-	DisplayName string    `json:"display_name"`
-	GameType    uint8     `json:"game_type"`
-	CreatedAt   time.Time `json:"created_at"`
-}
-
-type TableSchema struct {
-	Name    string         `json:"name"`
-	Columns []ColumnSchema `json:"columns"`
-}
-
-type ColumnSchema struct {
-	Name       string `json:"name"`
-	SQLType    string `json:"sql_type"`
-	Nullable   bool   `json:"nullable"`
-	PrimaryKey bool   `json:"primary_key"`
-}
-
-type Schema struct {
-	Module string        `json:"module"`
-	Tables []TableSchema `json:"tables"`
-}
-
 type RowsPage struct {
 	Module  string           `json:"module"`
 	Table   string           `json:"table"`
@@ -77,4 +43,81 @@ type Row struct {
 	Module string         `json:"module"`
 	Table  string         `json:"table"`
 	Values map[string]any `json:"values"`
+}
+
+type RuntimeManifest struct {
+	ModuleID             string              `json:"module_id"`
+	Version              string              `json:"version"`
+	ABIVersion           uint32              `json:"abi_version"`
+	StateTypeURL         string              `json:"state_type_url"`
+	CommandTypeURLs      []string            `json:"command_type_urls"`
+	TransitionDeadlineMS int                 `json:"transition_deadline_ms,omitempty"`
+	Capabilities         []string            `json:"capabilities,omitempty"`
+	DatabaseMigrations   []DatabaseMigration `json:"database_migrations,omitempty"`
+}
+
+type DatabaseMigration struct {
+	Version uint64            `json:"version"`
+	Name    string            `json:"name"`
+	Tables  []TableDefinition `json:"tables"`
+}
+
+type PublishModuleVersionRequest struct {
+	ModuleID           string
+	OCIReference       string
+	RegistryCredential string
+	Manifest           RuntimeManifest
+	DescriptorSet      []byte
+	ConformanceVectors []byte
+}
+
+type ModuleReference struct {
+	DeveloperID string `json:"developer_id"`
+	ModuleID    string `json:"module_id"`
+	Version     string `json:"version"`
+	ImageDigest string `json:"image_digest"`
+}
+
+type ModuleVersion struct {
+	Ref              ModuleReference `json:"ref"`
+	ImageRef         string          `json:"image_ref"`
+	ABIVersion       uint32          `json:"abi_version"`
+	DescriptorDigest string          `json:"descriptor_digest"`
+	Manifest         RuntimeManifest `json:"manifest"`
+	Status           string          `json:"status"`
+	Endpoint         string          `json:"endpoint,omitempty"`
+	CreatedAt        time.Time       `json:"created_at"`
+	UpdatedAt        time.Time       `json:"updated_at"`
+}
+
+type RuntimeModule struct {
+	DeveloperID   string    `json:"developer_id"`
+	Key           string    `json:"key"`
+	DisplayName   string    `json:"display_name"`
+	ActiveVersion string    `json:"active_version,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+type ValidationStatus struct {
+	DeveloperID string     `json:"developer_id"`
+	ModuleID    string     `json:"module_id"`
+	Version     string     `json:"version"`
+	StartedAt   time.Time  `json:"started_at"`
+	FinishedAt  *time.Time `json:"finished_at,omitempty"`
+	Result      string     `json:"result"`
+	Logs        string     `json:"logs"`
+}
+
+type CreateRoomRequest struct {
+	ModuleID string `json:"module_id"`
+	Version  string `json:"version,omitempty"`
+}
+
+type Room struct {
+	RoomID         string          `json:"room_id"`
+	Module         ModuleReference `json:"module"`
+	ModuleDatabase string          `json:"module_database"`
+	Seed           uint64          `json:"seed"`
+	CreatedAt      time.Time       `json:"created_at"`
 }

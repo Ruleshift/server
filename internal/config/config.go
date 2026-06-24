@@ -16,6 +16,7 @@ type Config struct {
 	DeveloperID          string
 	DeveloperName        string
 	DeveloperAPIKey      string
+	KubeconfigPath       string
 	MaxMessageBytes      int
 	RoomInputQueueSize   int
 	SessionSendQueueSize int
@@ -37,6 +38,7 @@ func Load() (Config, error) {
 		DeveloperID:          envString("RULESHIFT_DEVELOPER_ID", "default"),
 		DeveloperName:        envString("RULESHIFT_DEVELOPER_NAME", "Default developer"),
 		DeveloperAPIKey:      envString("RULESHIFT_DEVELOPER_API_KEY", ""),
+		KubeconfigPath:       envString("RULESHIFT_KUBECONFIG", ""),
 		MaxMessageBytes:      64 * 1024,
 		RoomInputQueueSize:   1024,
 		SessionSendQueueSize: 256,

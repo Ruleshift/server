@@ -1,0 +1,7 @@
+syntax = "proto3";
+package ruleshift.examples.hiddennumber.v1;
+option go_package = "example.com/ruleshift-hiddennumber/gen;hiddennumberv1";
+message State { bytes canonical_json = 1; }
+message Command { bytes canonical_json = 1; }
+message Delta { bytes canonical_json = 1; }
+message View { bytes canonical_json = 1; }

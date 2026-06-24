@@ -1,13 +1,14 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/Ruleshift/server/internal/game/xiangqi"
-	"github.com/Ruleshift/server/internal/room"
+	"github.com/Ruleshift/server/internal/module"
+	"github.com/Ruleshift/server/internal/roomcore"
 )
 
 func TestHealthHandler(t *testing.T) {
@@ -39,7 +40,10 @@ func TestReadyHandler(t *testing.T) {
 }
 
 func TestMetricsHandler(t *testing.T) {
-	registry := room.NewRegistry(room.RuntimeConfig{InputQueueSize: 4, GameModule: xiangqi.NewModule()})
+	registry, err := roomcore.NewRegistry(roomcore.NewMemoryStore(), module.ResolverFunc(func(context.Context, module.ModuleRef) (module.Runtime, error) { return nil, nil }), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
 	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	response := httptest.NewRecorder()
 

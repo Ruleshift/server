@@ -1,82 +1,59 @@
-# Ruleshift As A Service
+# Ruleshift Developer API v2
 
-Game developers use Ruleshift through a tenant-scoped HTTP API and an SDK. They do not receive PostgreSQL credentials and do not need to manage a VPS. A local Compose deployment uses the same contract as a hosted Ruleshift deployment; only the base URL and developer API key change.
+Developer API is used by Unity Editor tooling, CI, or a trusted backend. Its
+bearer key must never be included in a player build.
 
-The API contract is [developer.openapi.yaml](../api/developer.openapi.yaml).
+The complete contract is in `api/developer.openapi.yaml`.
 
-## Local Service
+## Local prerequisites
 
-Start the service:
+Start PostgreSQL:
 
 ```powershell
-docker compose up --build
+docker compose up -d postgres
 ```
 
-Local endpoint and credential:
+Run the v2 gateway in Kubernetes, or run it from an environment that can reach
+and resolve Kubernetes ClusterIP services. Outside a cluster, set:
 
 ```text
-Base URL: http://localhost:8080
-Developer API key: ruleshift-dev-key-change-me
+RULESHIFT_DATABASE_URL
+RULESHIFT_DATABASE_ADMIN_URL
+RULESHIFT_DEVELOPER_API_KEY
+RULESHIFT_KUBECONFIG
 ```
 
-The development key is declared only in `compose.yaml`. Hosted deployments must issue a separate secret per developer tenant.
-
-## Go Package
+## Go SDK
 
 ```go
-client, err := ruleshift.NewClient(
-    "http://localhost:8080",
-    os.Getenv("RULESHIFT_DEVELOPER_API_KEY"),
-    nil,
-)
-
-module, err := client.CreateModule(ctx, ruleshift.CreateModuleRequest{
-    Key:         "my_game",
-    DisplayName: "My Game",
-    Schema: ruleshift.ModuleSchema{Tables: []ruleshift.TableDefinition{
-        {
-            Name: "profiles",
-            Columns: []ruleshift.ColumnDefinition{
-                {Name: "player_id", Type: ruleshift.ColumnTypeString, PrimaryKey: true},
-                {Name: "rating", Type: ruleshift.ColumnTypeInt64},
-            },
-        },
-    }},
-})
-
-row, err := client.CreateRow(ctx, module.Key, "profiles", map[string]any{
-    "player_id": "player-1",
-    "rating":    1200,
-})
-
-rows, err := client.ListRows(ctx, module.Key, "profiles", 100, 0)
+client, err := ruleshift.NewClient(baseURL, developerKey, nil)
+module, err := client.CreateRuntimeModule(ctx, "my_game", "My Game")
+version, err := client.PublishModuleVersion(ctx, publishRequest)
+status, err := client.GetValidationStatus(ctx, module.Key, version.Ref.Version)
+room, err := client.CreateRoom(ctx, ruleshift.CreateRoomRequest{ModuleID: module.Key})
 ```
 
-The package lives at `github.com/Ruleshift/server/pkg/ruleshift` while the project remains a single Go module.
+Optional declarative module tables are accessed with `CreateRow` and `ListRows`.
+Ruleshift never returns PostgreSQL credentials or accepts arbitrary SQL.
 
-## Unity Package
+## Unity and NuGet SDK
 
-The Editor-only UPM package is in `sdk/unity/com.ruleshift.developer`. Add it from disk in Unity Package Manager, or add this entry to the Unity project's `Packages/manifest.json`:
+The Editor-only UPM package is `sdk/unity/com.ruleshift.developer`. The same
+client is packaged for .NET from `sdk/dotnet/Ruleshift.Developer`.
 
-```json
-{
-  "dependencies": {
-    "com.ruleshift.developer": "file:../server/sdk/unity/com.ruleshift.developer"
-  }
-}
-```
+Available v2 operations include:
 
-Its `RuleshiftDeveloperClient` provides `CreateModuleAsync`, `ListModulesAsync`, `GetSchemaAsync`, `CreateRowAsync`, and `ListRowsAsync`. See the package README for a complete example.
+- `CreateRuntimeModuleAsync`;
+- `PublishModuleVersionAsync`;
+- `GetModuleVersionAsync`;
+- `GetValidationStatusAsync`;
+- `CreateRoomAsync` and `GetRoomAsync`;
+- `CreateRowAsync` and `ListRowsAsync`.
 
-The same C# client can be packed for non-Unity tooling from `sdk/dotnet/Ruleshift.Developer` with `dotnet pack -c Release`.
+## Security boundary
 
-## Security Boundary
-
-- The developer key authenticates editor, CI, and trusted backend operations.
-- The developer package is Editor-only and excluded from Unity player builds.
-- Players continue to authenticate using short-lived game/Steam-compatible tickets over the protobuf WebSocket protocol.
-- The API accepts a bounded declarative schema, not arbitrary SQL.
-- Row reads are paginated to at most 200 rows.
-- Writes cannot target Ruleshift-owned room, event, or migration tables.
-
-Developer keys are stored as SHA-256 hashes in the control database and resolve every request to a tenant. The configured local key bootstraps the default developer; additional hosted keys can be issued or revoked without exposing database credentials.
+- developer keys are stored as hashes in the control DB;
+- registry credentials are stored only in tenant Kubernetes Secrets;
+- validation logs are bounded and never contain registry tokens;
+- every module/version/room lookup is scoped to the authenticated developer;
+- player authentication remains separate on protobuf WebSocket protocol v2.

@@ -1,214 +1,127 @@
 # Ruleshift
 
-Ruleshift is a production-like Go backend for a future Steam-compatible Unity C# multiplayer card game.
+Ruleshift is a Go authoritative multiplayer state service for game developers.
+Player clients send protobuf commands; Ruleshift orders them per room, invokes a
+developer-owned stateless game module, persists the result, and broadcasts one
+coherent revision stream.
 
-The MVP is deliberately still not the final card game. It is now an authoritative multiplayer room server that runs a pluggable game module; the current module is Xiangqi, backed by `github.com/laines-it/xiangqi-go` through its declared Go module path.
+The core is game-agnostic. A developer can add a fourth game from a separate
+repository by publishing a gRPC/protobuf OCI image; rebuilding Ruleshift is not
+required.
 
-## Why This Is Not CRUD
+## What the MVP demonstrates
 
-The project demonstrates a real-time networking pipeline:
+- binary protobuf WebSocket protocol v2;
+- authoritative, sequential room processing with bounded queues;
+- opaque module state and recipient-specific private/public/full projections;
+- immutable room pinning to developer/module/version/image digest;
+- snapshot plus generic event replay through the exact pinned module version;
+- Developer API for OCI publication, validation, activation and room creation;
+- PostgreSQL control DB plus isolated module databases;
+- hardened multi-tenant Kubernetes module scheduling.
 
 ```mermaid
 flowchart LR
-    Unity["Unity C# client"] --> WS["WebSocket binary frame"]
-    WS --> PB["protobuf ClientEnvelope"]
-    PB --> Gateway["Go gateway"]
-    Gateway --> Auth["mock / Steam-compatible auth"]
-    Auth --> RoomQueue["bounded room command queue"]
-    RoomQueue --> Runtime["sequential RoomRuntime"]
-    Runtime --> State["game state + revision"]
-    State --> Broadcast["protobuf ServerEnvelope broadcast"]
-    Broadcast --> Unity
+    Client["Unity / player client"] -->|"protobuf v2"| Gateway
+    Gateway --> Room["bounded sequential room"]
+    Room -->|"gRPC ABI + current state"| OCI["developer OCI module"]
+    OCI -->|"next state + projections"| Room
+    Room --> DB["events + snapshots"]
+    Backend["trusted backend / SDK"] --> API["Developer API v2"]
+    API --> K8s["validation + Kubernetes scheduler"]
 ```
 
-The server is authoritative: clients send intent, the server decides ordering, applies commands, increments room revision, and broadcasts the ordered state stream.
+## Contracts
 
-## Current Status
+- Player schema: [`internal/protocol/proto/ruleshift.proto`](internal/protocol/proto/ruleshift.proto)
+- Module ABI: [`internal/moduleruntime/proto/module_runtime.proto`](internal/moduleruntime/proto/module_runtime.proto)
+- Module guide: [`docs/module-development.md`](docs/module-development.md)
+- Card Game v2 example: [`docs/cardgame-module.md`](docs/cardgame-module.md)
+- Architecture: [`docs/architecture.md`](docs/architecture.md)
+- Protocol details: [`docs/protocol.md`](docs/protocol.md)
 
-Implemented in this iteration:
+The production WebSocket endpoint is `/v2/ws`. Protocol v1 is intentionally a
+breaking change and is rejected.
 
-- Go module and reviewable project skeleton.
-- `cmd/gateway` entrypoint with config loading, structured logging, `/healthz`, `/readyz`, optional minimal `/metrics`, graceful shutdown, and `/ws`.
-- `cmd/client` CLI client for manual protobuf WebSocket testing from a terminal.
-- `cmd/botload` entrypoint with planned load-test flags.
-- Auth interfaces with local mock provider and Steam Web API provider skeleton.
-- In-memory matchmaking orchestration layer with ticket creation, idempotency, cancellation, match formation, assignment TTL, lifecycle transitions, and event audit records.
-- Atomic in-memory game server allocator with indexed game/build pools, seat reservations, reservation TTL cleanup, idempotent reservation retry by match id, and server failure handling.
-- HMAC-signed connect tokens with assignment, match, server, player, and expiry claims.
-- Authoritative room state with pluggable game state, monotonic `uint64` revision, game command apply logic, snapshots, deltas, and registry.
-- Xiangqi module using the Go engine for legal move generation and `DoMove`, with first/second joined players seated as red/black.
-- Actor-like `RoomRuntime` owns state, accepts commands through a bounded queue, registers room-local subscribers, and sends a projected delta for each recipient.
-- Mandatory per-recipient projections keep canonical state and hashes server-side while delivering player, public-spectator, or trusted full views with a shared revision stream.
-- Hidden Number demo module and standalone gateway/client commands exercise private snapshots, private deltas, `view_hash`, and `no_visible_change`.
-- Gateway-owned websocket sessions implement `room.PlayerSink` with bounded outbound queues, non-blocking send, snapshot compaction for lagging clients, repeated slow-consumer disconnects, and graceful shutdown close.
-- WebSocket gateway on `/ws` using Gorilla WebSocket with binary protobuf envelopes, mock auth, join room, snapshots, `DoMove`/`Resign`/`OfferDraw` commands, delta broadcast, app-level ping/pong, and basic client sequence checks.
-- Reconnect/resume for rooms always returns a recipient-projected `StateSnapshot`; reconnecting with the same authenticated `player_id` replaces the old session.
-- Append-only room event log with sequence-numbered `RoomEvent` records, `InMemoryEventStore`, and replay that restores game state by reapplying module commands.
-- PostgreSQL control database for SaaS developers, module registrations, users, and provider identities.
-- Automatically provisioned database per developer/module, with immutable module-owned migrations, durable room/member projections, room events, and restart recovery.
-- Authenticated developer REST API with declarative module schemas and bounded table reads/writes; raw SQL and PostgreSQL credentials stay server-side.
-- Go client package and Editor-only Unity Package Manager SDK for using Ruleshift locally or as a hosted service.
-- Unity-compatible C# network skeleton with `MatchClient`, `ProtocolCodec`, mock auth tickets, generated protobuf bindings, and reconnect using `lastSeenRevision`.
-- Protobuf schema in `internal/protocol/proto/ruleshift.proto`.
-- Generated Go and C# protobuf bindings.
-- Direct protobuf encode/decode through generated Go and C# bindings.
-- Makefile targets for Go and C# protobuf generation.
-- Unit and integration tests for mock auth, config, protobuf WebSocket gateway flows, bounded send queues, game command apply, room broadcast, invalid commands, concurrent command ordering, slow consumers, and runtime shutdown.
-- Documentation for architecture, protocol, Steam integration, Unity integration, and performance plan.
-
-Not implemented yet:
-
-- Public matchmaking HTTP/protobuf API handlers wired into `cmd/gateway`.
-- Durable game/build registry and durable matchmaking/session storage (room and identity persistence are implemented).
-- Real game server launcher or container allocator.
-- Full Prometheus metrics and pprof endpoints.
-- Bot load execution against the gateway.
-- Card game mechanics. These are intentionally out of scope for this MVP.
-
-## Run
+## Run tests
 
 ```powershell
 go test ./...
-go run ./cmd/botload
-go run ./cmd/gateway
+go vet ./...
 ```
 
-For PostgreSQL-backed local startup, use `docker compose up --build`. Game developers then use `http://localhost:8080` through the Go or Unity SDK. See [docs/developer-api.md](docs/developer-api.md).
+The external examples and their byte-level conformance vectors are tested in
+the normal Go suite:
 
-The gateway defaults to `:8080`.
+- `examples/modules/xiangqi`
+- `examples/modules/hiddennumber`
+- `examples/modules/cardgame`
 
-Hidden-information demo (run the gateway first, then any combination of players and spectators):
+Build an example from the repository root:
 
 ```powershell
-go run ./cmd/hiddennumber-gateway
-go run ./cmd/hiddennumber-client -ticket mock:player-1 -set-secret 42
-go run ./cmd/hiddennumber-client -ticket mock:watcher -spectator
-go run ./cmd/hiddennumber-client -ticket mock:trusted:caster -spectator
+docker build -f examples/modules/hiddennumber/Dockerfile `
+  -t localhost:5000/hiddennumber:1.0.0 .
 ```
 
-Only the trusted spectator receives both private values. The ordinary spectator receives the public projection.
+## Run the production gateway
 
-```powershell
-$env:RULESHIFT_ADDR=":9090"
-go run ./cmd/gateway
-```
+Protocol v2 requires PostgreSQL and Kubernetes. Run `cmd/gateway` inside the
+cluster, or supply `RULESHIFT_KUBECONFIG` in a development environment that can
+resolve and reach cluster Services.
 
-Health check:
-
-```powershell
-Invoke-WebRequest http://localhost:8080/healthz
-Invoke-WebRequest http://localhost:8080/readyz
-Invoke-WebRequest http://localhost:8080/metrics
-```
-
-Developer service API: `http://localhost:8080/v1/developer/`. Its OpenAPI contract is [api/developer.openapi.yaml](api/developer.openapi.yaml); SDK usage is documented in [docs/developer-api.md](docs/developer-api.md).
-
-Step-by-step module authoring, including a complete authoritative reducer example, is documented in [docs/module-development.md](docs/module-development.md).
-
-Docker VPS deploy notes: [docs/vps-deploy.md](docs/vps-deploy.md).
-
-WebSocket endpoint:
+Required configuration:
 
 ```text
-ws://localhost:8080/ws
+RULESHIFT_DATABASE_URL
+RULESHIFT_DATABASE_ADMIN_URL
+RULESHIFT_DEVELOPER_API_KEY
+RULESHIFT_KUBECONFIG        # optional in-cluster
 ```
-
-Manual CLI checks:
 
 ```powershell
-go run ./cmd/client -addr ws://localhost:8080/ws -ticket mock:player-1 -room demo -op get
-go run ./cmd/client -addr ws://localhost:8080/ws -ticket mock:player-1 -room demo -op move -move h2e2
-go run ./cmd/client -addr ws://localhost:8080/ws -ticket mock:watcher -room demo -op watch
+go run ./cmd/gateway
 ```
 
-Interactive console for repeated checks:
+Endpoints:
+
+```text
+GET  /healthz
+GET  /readyz
+GET  /metrics
+WS   /v2/ws
+PUT  /v2/developer/registry-credentials/{name}
+POST /v2/developer/modules
+POST /v2/developer/modules/{module}/versions
+GET  /v2/developer/modules/{module}/versions/{version}
+GET  /v2/developer/modules/{module}/versions/{version}/validation
+POST /v2/rooms
+GET  /v2/rooms/{room_id}
+```
+
+Developer keys belong only in Unity Editor, CI, or a trusted backend. Player
+builds authenticate through the player protocol and cannot create rooms or
+publish modules.
+
+## Persistence reset
+
+This is a pre-production breaking migration. Old local room data is not
+migrated. Reset the Docker PostgreSQL volume before first v2 startup:
 
 ```powershell
-go run ./cmd/console -addr ws://localhost:8080/ws -ticket mock:player-1 -room demo
+docker compose down -v
 ```
 
-Then type short commands such as `get`, `move h2e2`, `resign`, `draw`, `room demo-2`, or `status`.
-Windows packaging notes: [docs/client-packaging.md](docs/client-packaging.md).
+## Security and failure behavior
 
-For a LAN server started with `RULESHIFT_ADDR=0.0.0.0:8080`, replace `localhost` with the server IPv4 address, for example `ws://192.168.1.50:8080/ws`.
+Each tenant receives a separate namespace, pull Secrets, ResourceQuota,
+LimitRange and default-deny network policy. Module pods run as non-root with
+read-only root filesystem, RuntimeDefault seccomp, all capabilities dropped,
+no service-account token, no host mounts and no external egress.
 
-More examples: [docs/cli-client.md](docs/cli-client.md).
+Module timeout/error never changes state or revision. Malformed, oversized or
+wrong-type responses are protocol violations; three within 60 seconds degrade
+the version and prevent new rooms from using it.
 
-## Configuration
-
-Environment variables:
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `RULESHIFT_ADDR` | `:8080` | HTTP gateway listen address |
-| `RULESHIFT_ENV` | `dev` | Environment label for logs |
-| `RULESHIFT_DATABASE_URL` | empty | Control/default PostgreSQL URL; empty keeps in-memory mode |
-| `RULESHIFT_DATABASE_ADMIN_URL` | derived from database URL | PostgreSQL provisioning URL with `CREATEDB` |
-| `RULESHIFT_MODULE_DATABASE_PREFIX` | `ruleshift_module_` | Prefix for per-developer/module databases |
-| `RULESHIFT_DEVELOPER_ID` | `default` | Safe tenant identifier used in module database names |
-| `RULESHIFT_DEVELOPER_NAME` | `Default developer` | Tenant display name in the control database |
-| `RULESHIFT_DEVELOPER_API_KEY` | empty | Bearer key enabling the tenant-scoped developer API; requires PostgreSQL |
-| `RULESHIFT_MAX_MESSAGE_BYTES` | `65536` | Max protobuf WebSocket payload size |
-| `RULESHIFT_ROOM_INPUT_QUEUE_SIZE` | `1024` | Bounded per-room command queue size |
-| `RULESHIFT_SESSION_SEND_QUEUE_SIZE` | `256` | Bounded per-session send queue size |
-| `RULESHIFT_AUTH_TIMEOUT` | `5s` | Auth deadline |
-| `RULESHIFT_READ_TIMEOUT` | `30s` | HTTP read timeout |
-| `RULESHIFT_WRITE_TIMEOUT` | `30s` | HTTP write timeout |
-| `RULESHIFT_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown deadline |
-| `RULESHIFT_ENABLE_METRICS` | `true` | Enable minimal `/metrics` endpoint |
-| `RULESHIFT_ENABLE_PPROF` | `false` | Future pprof toggle |
-
-## Matchmaking And Assignment Flow
-
-The new orchestration layer is currently an internal Go package, ready to be exposed by future API handlers:
-
-1. Create a ticket with `game_id`, `build_id`, `player_id`, optional idempotency key, and TTL.
-2. The matcher groups queued tickets from the same game/build pool into a match.
-3. The allocator atomically reserves server seats and creates player assignments.
-4. Each assignment returns `endpoint`, `match_id`, `server_id`, and a signed connect token.
-5. The game server validates the connect token before accepting the player, then reports lifecycle progress toward `connecting`, `in_game`, and `ended` or `failed`.
-
-## Protocol Direction
-
-All client messages will be wrapped in `ClientEnvelope`. All server messages will be wrapped in `ServerEnvelope`. Each WebSocket binary payload carries one serialized protobuf envelope with no extra application-level length prefix.
-
-The protobuf schema lives in [internal/protocol/proto/ruleshift.proto](internal/protocol/proto/ruleshift.proto).
-
-Generate protobuf bindings after installing `protoc` and `protoc-gen-go`:
-
-```powershell
-.\scripts\proto.ps1
-```
-
-The script prepends the WinGet-installed `protoc.exe` path for the current run, so generation works even if the already-running shell has not refreshed PATH.
-
-## Development Roadmap
-
-1. Phase 0: repository discovery, architecture plan, documentation, project structure.
-2. Phase 1: Go skeleton, config, structured logging, entrypoints, package boundaries.
-3. Phase 2: protobuf generation and direct protobuf wire payloads.
-4. Phase 3: authoritative game room model and reducer tests.
-5. Phase 4: actor-like room runtime, bounded queues, slow consumer behavior.
-6. Phase 5: WebSocket gateway integration tests.
-7. Phase 6: Steam-compatible authentication implementation and httptest coverage.
-8. Phase 7: reconnect/resume with snapshots.
-9. Phase 8: event log and replay.
-10. Phase 9: Unity C# client skeleton.
-11. Phase 10: observability and profiling.
-12. Phase 11: bot load tests.
-13. Phase 12: test and benchmark strategy.
-14. Phase 13: interview polish and performance report.
-
-## Interview Angle
-
-Ruleshift is meant to show:
-
-- authoritative multiplayer server design;
-- ordered room command processing;
-- bounded queues and backpressure;
-- cross-language protobuf protocol design;
-- reconnect and revision-based state recovery;
-- append-only event logs and replay;
-- observability and load-test thinking;
-- clean package boundaries for a future domain layer.
-
+An architecture test ensures production core never imports code from
+`examples/modules`.

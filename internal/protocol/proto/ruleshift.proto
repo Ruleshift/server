@@ -1,9 +1,11 @@
 syntax = "proto3";
 
-package ruleshift.v1;
+package ruleshift.v2;
 
-option go_package = "github.com/Ruleshift/server/internal/protocol/generated/go/ruleshiftv1;ruleshiftv1";
-option csharp_namespace = "Ruleshift.Protocol.V1";
+import "google/protobuf/any.proto";
+
+option go_package = "github.com/Ruleshift/server/internal/protocol/generated/go/ruleshiftv2;ruleshiftv2";
+option csharp_namespace = "Ruleshift.Protocol.V2";
 
 message ClientEnvelope {
   uint32 protocol_version = 1;
@@ -31,31 +33,14 @@ message ServerEnvelope {
   }
 }
 
-message AuthRequest {
-  string ticket = 1;
-}
+message AuthRequest { string ticket = 1; }
 
 message AuthOk {
   string player_id = 1;
   string display_name = 2;
 }
 
-message AuthFailed {
-  string reason = 1;
-}
-
-message JoinRoomRequest {
-  string room_id = 1;
-  uint64 last_seen_revision = 2;
-  JoinMode join_mode = 3;
-}
-
-message JoinRoomOk {
-  string room_id = 1;
-  uint64 current_revision = 2;
-  JoinMode join_mode = 3;
-  ViewScope view_scope = 4;
-}
+message AuthFailed { string reason = 1; }
 
 enum JoinMode {
   JOIN_MODE_UNSPECIFIED = 0;
@@ -70,85 +55,37 @@ enum ViewScope {
   VIEW_SCOPE_FULL = 3;
 }
 
-enum GameType {
-  GAME_TYPE_UNSPECIFIED = 0;
-  GAME_TYPE_XIANGQI = 1;
-  GAME_TYPE_HIDDEN_NUMBER = 2;
+message ModuleRef {
+  string module_id = 1;
+  string version = 2;
 }
 
-enum GameCommandType {
-  GAME_COMMAND_TYPE_UNSPECIFIED = 0;
-  GAME_COMMAND_TYPE_DO_MOVE = 1;
-  GAME_COMMAND_TYPE_RESIGN = 2;
-  GAME_COMMAND_TYPE_OFFER_DRAW = 3;
-  GAME_COMMAND_TYPE_SET_SECRET = 4;
+message JoinRoomRequest {
+  string room_id = 1;
+  uint64 last_seen_revision = 2;
+  JoinMode join_mode = 3;
 }
 
-enum XiangqiSide {
-  XIANGQI_SIDE_UNSPECIFIED = 0;
-  XIANGQI_SIDE_RED = 1;
-  XIANGQI_SIDE_BLACK = 2;
-}
-
-enum GameStatus {
-  GAME_STATUS_UNSPECIFIED = 0;
-  GAME_STATUS_ACTIVE = 1;
-  GAME_STATUS_RESIGNED = 2;
-  GAME_STATUS_DRAW_OFFERED = 3;
-  GAME_STATUS_DRAWN = 4;
+message JoinRoomOk {
+  string room_id = 1;
+  uint64 current_revision = 2;
+  JoinMode join_mode = 3;
+  ViewScope view_scope = 4;
+  ModuleRef module = 5;
 }
 
 message GameCommand {
   string room_id = 1;
   uint64 expected_revision = 2;
-  oneof command {
-    DoMove do_move = 10;
-    Resign resign = 11;
-    OfferDraw offer_draw = 12;
-    SetSecret set_secret = 13;
-  }
-}
-
-message DoMove {
-  uint32 from_square = 1;
-  uint32 to_square = 2;
-  string move_uci = 3;
-}
-
-message Resign {}
-
-message OfferDraw {}
-
-message SetSecret {
-  int64 value = 1;
-}
-
-message SquareUpdate {
-  uint32 square = 1;
-  uint32 piece = 2;
+  google.protobuf.Any command = 3;
 }
 
 message StateSnapshot {
   string room_id = 1;
   uint64 revision = 2;
-  GameType game_type = 3;
-  uint64 view_hash = 4;
-  oneof state {
-    XiangqiSnapshot xiangqi = 10;
-    HiddenNumberSnapshot hidden_number = 11;
-  }
-}
-
-message XiangqiSnapshot {
-  string fen = 1;
-  repeated uint32 board = 2 [packed = true];
-  XiangqiSide side_to_move = 3;
-  GameStatus status = 4;
-  string red_player_id = 5;
-  string black_player_id = 6;
-  string winner_player_id = 7;
-  string draw_offered_by_player_id = 8;
-  uint64 state_hash = 9;
+  ModuleRef module = 3;
+  bytes view_digest = 4;
+  google.protobuf.Any state = 5;
 }
 
 message StateDelta {
@@ -156,43 +93,10 @@ message StateDelta {
   uint64 previous_revision = 2;
   uint64 new_revision = 3;
   string changed_by_player_id = 4;
-  GameType game_type = 5;
-  uint64 view_hash = 6;
+  ModuleRef module = 5;
+  bytes view_digest = 6;
   bool no_visible_change = 7;
-  oneof delta {
-    XiangqiDelta xiangqi = 10;
-    HiddenNumberDelta hidden_number = 11;
-  }
-}
-
-message XiangqiDelta {
-  GameCommandType command_type = 1;
-  string move_uci = 2;
-  uint32 from_square = 3;
-  uint32 to_square = 4;
-  repeated SquareUpdate square_updates = 5;
-  XiangqiSide side_to_move = 6;
-  GameStatus status = 7;
-  string winner_player_id = 8;
-  string draw_offered_by_player_id = 9;
-  uint64 state_hash = 10;
-}
-
-message HiddenNumberPlayerView {
-  string player_id = 1;
-  bool has_secret = 2;
-  optional int64 secret = 3;
-}
-
-message HiddenNumberSnapshot {
-  repeated HiddenNumberPlayerView players = 1;
-  GameStatus status = 2;
-}
-
-message HiddenNumberDelta {
-  string player_id = 1;
-  bool has_secret = 2;
-  optional int64 secret = 3;
+  google.protobuf.Any delta = 8;
 }
 
 message SnapshotRequest {
@@ -205,13 +109,9 @@ message ErrorMessage {
   string message = 2;
 }
 
-message Ping {
-  int64 client_time_unix_ms = 1;
-}
+message Ping { int64 client_time_unix_ms = 1; }
 
 message Pong {
   int64 client_time_unix_ms = 1;
   int64 server_time_unix_ms = 2;
 }
-
-

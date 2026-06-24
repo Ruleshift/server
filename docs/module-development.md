@@ -1,1154 +1,392 @@
-# Создание модулей для Ruleshift
+# Создание внешнего модуля Ruleshift
 
-Этот документ описывает два разных вида модулей Ruleshift, способы их создания, ограничения текущей версии и полный пример authoritative-модуля.
+Модуль Ruleshift — это stateless gRPC-сервис в OCI image. Репозиторий и язык
+модуля выбирает разработчик игры. Клонировать Ruleshift и добавлять пакет в
+`internal/game` больше не требуется.
 
-## 1. Какой модуль вам нужен
+Ruleshift хранит состояние комнаты, ревизии, event log и snapshots. Модуль
+получает текущее protobuf-состояние и возвращает следующее. Клиент никогда не
+присылает готовое состояние.
 
-В Ruleshift слово «модуль» используется для двух разных расширений:
+```text
+player command -> Ruleshift room queue -> ModuleRuntime.Apply
+                                      <- next_state + delta
+               -> transactional event/snapshot -> projected broadcast
+```
 
-| Вид | Для кого | Что добавляет | Нужна сборка gateway |
-| --- | --- | --- | --- |
-| Data-модуль | Разработчик игры, использующий Ruleshift как сервис | Изолированную БД и пользовательские таблицы | Нет |
-| Authoritative game module | Разработчик серверной логики Ruleshift | Правила игры, команды, snapshots, deltas и replay | Да |
+## 1. Что понадобится
 
-Выбирайте data-модуль, если нужны профили, инвентарь, рейтинг, настройки или другая прикладная информация. Он создаётся через SDK или HTTP API.
+- любой язык с gRPC и protobuf;
+- Docker или другой OCI builder;
+- registry, доступный Kubernetes-кластеру Ruleshift;
+- Developer API key для Editor, CI или trusted backend;
+- собственный module repository.
 
-Выбирайте authoritative-модуль, если Ruleshift должен проверять игровые действия и последовательно изменять состояние комнаты. Такой модуль является частью Go-сервера.
+Developer API key нельзя включать в player build.
 
-> Важно: создание data-модуля не загружает на сервер новые игровые правила. Оно создаёт только tenant-scoped хранилище. Authoritative-логика всегда исполняется на сервере и не принимается от игрового клиента.
+## 2. Подключите ABI
 
----
+Скопируйте `internal/moduleruntime/proto/module_runtime.proto` в свой репозиторий
+или подключите опубликованный ABI package. ABI v1 содержит сервис:
 
-# Часть I. Data-модуль через SDK
+```proto
+service ModuleRuntime {
+  rpc Describe(DescribeRequest) returns (DescribeResponse);
+  rpc NewState(NewStateRequest) returns (TransitionResponse);
+  rpc PlayerJoined(PlayerTransitionRequest) returns (TransitionResponse);
+  rpc PlayerLeft(PlayerTransitionRequest) returns (TransitionResponse);
+  rpc Apply(ApplyRequest) returns (TransitionResponse);
+  rpc ProjectSnapshot(ProjectRequest) returns (ProjectionResponse);
+  rpc ProjectDelta(ProjectDeltaRequest) returns (ProjectionResponse);
+}
+```
 
-## 2. Подготовка локального сервиса
-
-Запустите Ruleshift и PostgreSQL:
+Сгенерируйте bindings стандартными инструментами своего языка. Для Go:
 
 ```powershell
-docker compose up --build
+protoc -I . --go_out=. --go-grpc_out=. proto/module_runtime.proto
 ```
 
-Локальная конфигурация из `compose.yaml`:
+## 3. Опишите protobuf своей игры
+
+Типы игры не добавляются в player protocol Ruleshift. Создайте отдельный proto:
+
+```proto
+syntax = "proto3";
+package acme.mygame.v1;
+
+message State {
+  repeated Player players = 1;
+  uint32 turn = 2;
+}
+
+message Player {
+  string player_id = 1;
+  int64 private_score = 2;
+}
+
+message PlayCommand { uint32 cell = 1; }
+
+message Delta {
+  string player_id = 1;
+  uint32 cell = 2;
+}
+
+message View {
+  repeated PublicPlayer players = 1;
+  optional int64 own_private_score = 2;
+}
+```
+
+Полные type URLs будут такими:
 
 ```text
-Base URL: http://localhost:8080
-Developer API key: ruleshift-dev-key-change-me
+type.googleapis.com/acme.mygame.v1.State
+type.googleapis.com/acme.mygame.v1.PlayCommand
+type.googleapis.com/acme.mygame.v1.Delta
+type.googleapis.com/acme.mygame.v1.View
 ```
 
-Для hosted Ruleshift меняются только Base URL и API key. Контракт API остаётся тем же.
-
-Проверка доступности:
+Пакеты `ruleshift.*` зарезервированы core. Descriptor set публикуется вместе с
+версией:
 
 ```powershell
-Invoke-WebRequest http://localhost:8080/readyz
+protoc -I . --include_imports --descriptor_set_out=descriptor.pb proto/mygame.proto
 ```
 
-Developer API включается только при одновременной настройке:
+## 4. Реализуйте stateless runtime
 
-```text
-RULESHIFT_DATABASE_URL
-RULESHIFT_DEVELOPER_API_KEY
-```
+Контейнер не хранит room state между RPC. Нельзя использовать global map вида
+`room_id -> state`: Ruleshift может направить следующий запрос в другую replica.
 
-API key определяет developer tenant. Модули и строки другого tenant этим ключом недоступны.
-
-## 3. Ограничения декларативной схемы
-
-Имена модуля, таблиц и столбцов должны соответствовать выражению:
-
-```text
-^[a-z][a-z0-9_]{0,47}$
-```
-
-Допустимые примеры:
-
-```text
-my_game
-player_profiles
-inventory_v2
-```
-
-Недопустимые примеры:
-
-```text
-MyGame          # заглавные буквы
-my-game         # дефис
-2d_game         # начинается с цифры
-player profiles # пробел
-```
-
-Поддерживаемые типы:
-
-| SDK type | PostgreSQL type | Пример |
-| --- | --- | --- |
-| `string` | `TEXT` | player id, nickname |
-| `int64` | `BIGINT` | rating, currency |
-| `float64` | `DOUBLE PRECISION` | координата, коэффициент |
-| `bool` | `BOOLEAN` | feature flag |
-| `timestamp` | `TIMESTAMPTZ` | время последнего входа |
-| `json` | `JSONB` | гибкие настройки |
-
-Дополнительные ограничения:
-
-- не более 32 пользовательских таблиц в одном запросе создания модуля;
-- не более 128 столбцов в таблице;
-- primary key автоматически становится `NOT NULL`;
-- остальные столбцы также `NOT NULL`, если явно не установлен `Nullable`;
-- разрешён составной primary key;
-- имена `rooms`, `room_players`, `room_events` и `ruleshift_schema_migrations` зарезервированы;
-- произвольный SQL через публичный API не принимается.
-
-## 4. Создание data-модуля из Go
-
-Публичный package:
-
-```text
-github.com/Ruleshift/server/pkg/ruleshift
-```
-
-Установка в отдельный Go-проект:
-
-```powershell
-go get github.com/Ruleshift/server/pkg/ruleshift
-```
-
-Пример модуля с профилями и инвентарём:
+Псевдокод `Apply`:
 
 ```go
-package main
+func (s *Server) Apply(ctx context.Context, req *modulev1.ApplyRequest) (*modulev1.TransitionResponse, error) {
+    current := unpackState(req.State)
+    command := unpackPlayCommand(req.Command)
 
-import (
-    "context"
-    "fmt"
-    "os"
+    if !current.IsPlayersTurn(req.PlayerId) {
+        return nil, status.Error(codes.FailedPrecondition, "not player's turn")
+    }
 
-    "github.com/Ruleshift/server/pkg/ruleshift"
-)
-
-func main() {
-    ctx := context.Background()
-
-    client, err := ruleshift.NewClient(
-        "http://localhost:8080",
-        os.Getenv("RULESHIFT_DEVELOPER_API_KEY"),
-        nil,
-    )
+    next := current.Clone()
+    delta, err := next.Play(req.PlayerId, command.Cell)
     if err != nil {
-        panic(err)
+        return nil, status.Error(codes.InvalidArgument, err.Error())
     }
 
-    module, err := client.CreateModule(ctx, ruleshift.CreateModuleRequest{
-        Key:         "my_game",
-        DisplayName: "My Game",
-        Schema: ruleshift.ModuleSchema{
-            Tables: []ruleshift.TableDefinition{
-                {
-                    Name: "profiles",
-                    Columns: []ruleshift.ColumnDefinition{
-                        {
-                            Name:       "player_id",
-                            Type:       ruleshift.ColumnTypeString,
-                            PrimaryKey: true,
-                        },
-                        {
-                            Name: "rating",
-                            Type: ruleshift.ColumnTypeInt64,
-                        },
-                        {
-                            Name:     "settings",
-                            Type:     ruleshift.ColumnTypeJSON,
-                            Nullable: true,
-                        },
-                    },
-                },
-                {
-                    Name: "inventory",
-                    Columns: []ruleshift.ColumnDefinition{
-                        {
-                            Name:       "player_id",
-                            Type:       ruleshift.ColumnTypeString,
-                            PrimaryKey: true,
-                        },
-                        {
-                            Name:       "item_id",
-                            Type:       ruleshift.ColumnTypeString,
-                            PrimaryKey: true,
-                        },
-                        {
-                            Name: "quantity",
-                            Type: ruleshift.ColumnTypeInt64,
-                        },
-                    },
-                },
-            },
-        },
-    })
-    if err != nil {
-        panic(err)
-    }
-
-    fmt.Printf("created module: %s\n", module.Key)
+    return &modulev1.TransitionResponse{
+        Changed:   true,
+        NextState: pack(next),
+        Delta:     pack(delta),
+    }, nil
 }
 ```
 
-Перед запуском:
+Обязательные свойства:
 
-```powershell
-$env:RULESHIFT_DEVELOPER_API_KEY="ruleshift-dev-key-change-me"
-go run .
-```
+- одинаковый запрос даёт byte-for-byte одинаковый ответ;
+- случайность берётся только из `RoomContext.seed`;
+- время берётся только из `RoomContext.now_unix_ms`;
+- `player_id` берётся из запроса Ruleshift и считается authenticated;
+- внешние side effects запрещены;
+- БД, filesystem mounts и внешний network модулю недоступны;
+- `operation_id` сохранять не нужно: side effects всё равно запрещены.
 
-## 5. Запись и чтение данных из Go
+Ошибка или timeout не изменяют состояние и revision комнаты. Ожидаемые ошибки
+команды возвращайте через `InvalidArgument`, `FailedPrecondition` или
+`PermissionDenied`. Ruleshift преобразует их в `command_rejected`.
 
-Создание строки:
+## 5. Реализуйте projections
+
+Canonical state никогда не отправляется игроку напрямую. `ProjectSnapshot` и
+`ProjectDelta` получают `Viewer`:
+
+| mode/scope | Назначение |
+| --- | --- |
+| player/player | приватный view конкретного игрока |
+| spectator/public | публичная трансляция без секретов |
+| spectator/full | trusted observer с полным view |
+
+Не полагайтесь только на `player_id`: проверяйте scope. Для невидимого изменения
+верните `no_visible_change = true` и валидный protobuf payload. Ruleshift считает
+SHA-256 каждого view и помещает его в player protocol.
+
+## 6. Лимиты и deadlines
+
+| Payload | Максимум |
+| --- | ---: |
+| canonical state | 1 MiB |
+| command | 256 KiB |
+| delta | 256 KiB |
+| projected view | 256 KiB |
+
+Стандартный transition deadline — 50 ms, `NewState` — 250 ms. Manifest может
+уменьшить deadline или поднять transition deadline до 250 ms. Ruleshift делает
+не больше одного retry и только для gRPC `Unavailable`, внутри исходного
+deadline.
+
+## 7. Реализуйте Describe
+
+`Describe` должен точно совпасть с manifest:
 
 ```go
-row, err := client.CreateRow(ctx, "my_game", "profiles", map[string]any{
-    "player_id": "player-1",
-    "rating":    int64(1200),
-    "settings": map[string]any{
-        "language": "ru",
-        "music":    true,
-    },
-})
-if err != nil {
-    panic(err)
-}
-
-fmt.Println(row.Values["player_id"])
-```
-
-Получение страницы строк:
-
-```go
-page, err := client.ListRows(ctx, "my_game", "profiles", 100, 0)
-if err != nil {
-    panic(err)
-}
-
-for _, row := range page.Rows {
-    fmt.Printf("player=%v rating=%v\n", row["player_id"], row["rating"])
+return &modulev1.DescribeResponse{
+    ModuleId:            "mygame",
+    Version:             "1.0.0",
+    AbiVersion:          1,
+    StateTypeUrl:        "type.googleapis.com/acme.mygame.v1.State",
+    CommandTypeUrls:     []string{"type.googleapis.com/acme.mygame.v1.PlayCommand"},
+    DescriptorSetSha256: descriptorSHA256,
+    SupportsPlayerLeft:  true,
 }
 ```
 
-Просмотр фактической схемы:
+Также зарегистрируйте стандартный gRPC health service. Readiness наступает только
+после готовности обеих replicas и успешного `Describe`.
 
-```go
-schema, err := client.GetSchema(ctx, "my_game")
-if err != nil {
-    panic(err)
-}
-
-for _, table := range schema.Tables {
-    fmt.Println(table.Name)
-    for _, column := range table.Columns {
-        fmt.Printf("  %s %s nullable=%t pk=%t\n",
-            column.Name,
-            column.SQLType,
-            column.Nullable,
-            column.PrimaryKey,
-        )
-    }
-}
-```
-
-Пагинация ограничена 200 строками на запрос. `offset` должен находиться в диапазоне от 0 до 1 000 000.
-
-## 6. Создание data-модуля из Unity/C#
-
-UPM package находится здесь:
-
-```text
-sdk/unity/com.ruleshift.developer
-```
-
-Добавьте локальный package в `Packages/manifest.json` Unity-проекта:
+## 8. Создайте manifest
 
 ```json
 {
-  "dependencies": {
-    "com.ruleshift.developer": "file:../server/sdk/unity/com.ruleshift.developer"
-  }
+  "module_id": "mygame",
+  "version": "1.0.0",
+  "abi_version": 1,
+  "state_type_url": "type.googleapis.com/acme.mygame.v1.State",
+  "command_type_urls": [
+    "type.googleapis.com/acme.mygame.v1.PlayCommand"
+  ],
+  "transition_deadline_ms": 75,
+  "capabilities": [
+    "player_lifecycle",
+    "private_projection",
+    "public_projection"
+  ]
 }
 ```
 
-Пример Editor-кода:
+Версия обязана быть SemVer. Повторная публикация того же SemVer и digest
+идемпотентна. Другой digest с уже существующим SemVer отклоняется.
 
-```csharp
-using System;
-using System.Collections.Generic;
-using System.Threading.Tasks;
-using Ruleshift.Developer;
+## 9. Optional additive database schema
 
-public static class CreateRuleshiftModule
+Модуль не получает прямой доступ к БД. Если trusted backend нужны свои таблицы,
+добавьте декларативные additive migrations в manifest:
+
+```json
 {
-    public static async Task Run()
+  "database_migrations": [
     {
-        using var client = new RuleshiftDeveloperClient(
-            "http://localhost:8080",
-            Environment.GetEnvironmentVariable("RULESHIFT_DEVELOPER_API_KEY"));
-
-        var module = await client.CreateModuleAsync(new CreateModuleRequest
+      "version": 1,
+      "name": "create_profiles",
+      "tables": [
         {
-            Key = "my_game",
-            DisplayName = "My Game",
-            Schema = new ModuleSchema
-            {
-                Tables =
-                {
-                    new TableDefinition
-                    {
-                        Name = "profiles",
-                        Columns =
-                        {
-                            new ColumnDefinition
-                            {
-                                Name = "player_id",
-                                Type = RuleshiftColumnType.String,
-                                PrimaryKey = true
-                            },
-                            new ColumnDefinition
-                            {
-                                Name = "rating",
-                                Type = RuleshiftColumnType.Int64
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
-        await client.CreateRowAsync(
-            module.Key,
-            "profiles",
-            new Dictionary<string, object>
-            {
-                ["player_id"] = "player-1",
-                ["rating"] = 1200L
-            });
-
-        var rows = await client.ListRowsAsync(module.Key, "profiles");
-        foreach (var row in rows.Rows)
-            Console.WriteLine(row["player_id"]);
-    }
-}
-```
-
-Unity package является Editor-only. Developer API key не включается в player build.
-
-Для обычных .NET-инструментов тот же клиент можно собрать как NuGet package:
-
-```powershell
-dotnet pack sdk/dotnet/Ruleshift.Developer/Ruleshift.Developer.csproj -c Release
-```
-
-## 7. Создание модуля напрямую через HTTP
-
-```powershell
-$headers = @{
-    Authorization = "Bearer ruleshift-dev-key-change-me"
-}
-
-$body = @{
-    key = "my_game"
-    display_name = "My Game"
-    schema = @{
-        tables = @(
-            @{
-                name = "profiles"
-                columns = @(
-                    @{ name = "player_id"; type = "string"; primary_key = $true },
-                    @{ name = "rating"; type = "int64" }
-                )
-            }
-        )
-    }
-} | ConvertTo-Json -Depth 10
-
-Invoke-RestMethod `
-    -Method Post `
-    -Uri http://localhost:8080/v1/developer/modules `
-    -Headers $headers `
-    -ContentType "application/json" `
-    -Body $body
-```
-
-Полный контракт находится в `api/developer.openapi.yaml`.
-
-## 8. Идемпотентность и изменение схемы
-
-Повторный `CreateModule` с тем же key и полностью той же схемой безопасен: миграция имеет тот же checksum, а запись модуля обновляется через upsert.
-
-Нельзя изменить уже применённую миграцию. Запрос с тем же key и изменённой первой схемой завершится конфликтом. Это защищает работающую БД от незаметного переписывания истории.
-
-В текущей версии публичный API создаёт только первую декларативную миграцию. Для эксперимента с несовместимой схемой используйте новый module key, например:
-
-```text
-my_game_v2
-```
-
-Для production-эволюции схемы потребуется отдельный endpoint версионированных миграций; его пока нет.
-
-## 9. Доступные операции и текущие ограничения
-
-Data SDK сейчас предоставляет:
-
-- создание модуля;
-- список модулей tenant;
-- чтение схемы;
-- создание строки;
-- постраничное чтение строк.
-
-В текущем MVP отсутствуют:
-
-- update/upsert строки;
-- delete строки;
-- фильтры, сортировка и индексы в декларативном API;
-- foreign keys между пользовательскими таблицами;
-- публичное управление и ротация API keys.
-
-Не обходите эти ограничения выдачей пользователю PostgreSQL credentials. Расширяйте tenant-scoped API.
-
----
-
-# Часть II. Authoritative game module на Go
-
-## 10. Контракт authoritative-модуля
-
-Authoritative-модуль реализует интерфейс `game.Module`:
-
-```go
-type Module interface {
-    Type() Type
-    NewState(now time.Time) (any, error)
-    PlayerJoined(state any, playerID string) (next any, changed bool, err error)
-    Snapshot(state any) (Snapshot, error)
-    ProjectSnapshot(state any, viewer Viewer) (ViewSnapshot, error)
-    ProjectDelta(before any, after any, delta Delta, viewer Viewer) (ViewDelta, error)
-    Apply(state any, command Command) (any, Delta, error)
-}
-```
-
-Жизненный цикл:
-
-1. `NewState` создаёт начальное состояние комнаты.
-2. `PlayerJoined` добавляет серверно подтверждённого игрока.
-3. `Apply` проверяет command intent и возвращает новое состояние и delta.
-4. Room runtime записывает событие в durable store.
-5. Только после успешной записи runtime публикует новое состояние.
-6. `Snapshot` формирует полное состояние для reconnect/recovery.
-7. После рестарта события повторно проходят через `PlayerJoined` и `Apply`.
-
-Обязательные инварианты:
-
-- не доверять player id или state из клиентского payload;
-- `PlayerJoined` и `Apply` не должны менять входной state на месте;
-- rejected command не меняет state и revision;
-- accepted command увеличивает room revision ровно один раз;
-- state hash должен быть детерминированным;
-- reducer не должен обращаться к сети;
-- reducer не должен создавать goroutine;
-- все payload должны иметь ограниченный размер;
-- одинаковый начальный state и одинаковая последовательность команд должны давать одинаковый результат.
-
-## 11. Структура нового Go-модуля
-
-Пример для счётчика:
-
-```text
-internal/game/counter/
-    module.go
-    module_test.go
-```
-
-Пакет находится внутри `internal`, поэтому authoritative-модуль создаётся в этом репозитории и входит в сборку gateway. Внешний Go-проект не может напрямую реализовать этот контракт без переноса публичного server module SDK в отдельный repository/package.
-
-## 12. Добавление enum значений
-
-В `internal/game/game.go` добавьте уникальный game type и command type:
-
-```go
-const (
-    TypeUnspecified Type = iota
-    TypeXiangqi
-    TypeCounter
-)
-
-const (
-    CommandUnspecified CommandType = iota
-    CommandDoMove
-    CommandResign
-    CommandOfferDraw
-    CommandAdd
-)
-```
-
-Не переиспользуйте существующее числовое значение: оно сохраняется в events и protobuf.
-
-## 13. Полный минимальный reducer
-
-Файл `internal/game/counter/module.go`:
-
-```go
-package counter
-
-import (
-    "context"
-    "encoding/binary"
-    "encoding/json"
-    "fmt"
-    "hash/fnv"
-    "math"
-    "time"
-
-    "github.com/Ruleshift/server/internal/game"
-)
-
-type Module struct{}
-
-type State struct {
-    Value int64
-}
-
-type Add struct {
-    Amount int64 `json:"amount"`
-}
-
-type Snapshot struct {
-    game.Snapshot
-    Value int64
-}
-
-type Delta struct {
-    game.Delta
-    Amount int64
-    Value  int64
-}
-
-func NewModule() Module {
-    return Module{}
-}
-
-func (Module) Type() game.Type {
-    return game.TypeCounter
-}
-
-func (Module) NewState(_ time.Time) (any, error) {
-    return &State{}, nil
-}
-
-func (Module) PlayerJoined(raw any, playerID string) (any, bool, error) {
-    state, err := stateFrom(raw)
-    if err != nil {
-        return raw, false, err
-    }
-    if playerID == "" {
-        return raw, false, fmt.Errorf("player id must not be empty")
-    }
-
-    // Даже если join не меняет предметное состояние, возвращаем отдельную копию.
-    next := *state
-    return &next, false, nil
-}
-
-func (Module) Snapshot(raw any) (game.Snapshot, error) {
-    state, err := stateFrom(raw)
-    if err != nil {
-        return game.Snapshot{}, err
-    }
-
-    base := game.Snapshot{
-        Type:      game.TypeCounter,
-        Status:    game.StatusActive,
-        StateHash: stateHash(state.Value),
-    }
-    payload := Snapshot{
-        Snapshot: base,
-        Value:    state.Value,
-    }
-    base.Payload = payload
-    return base, nil
-}
-
-func (m Module) ProjectSnapshot(raw any, _ game.Viewer) (game.ViewSnapshot, error) {
-    snapshot, err := m.Snapshot(raw)
-    if err != nil {
-        return game.ViewSnapshot{}, err
-    }
-    return game.ViewSnapshot{
-        Type: snapshot.Type, Status: snapshot.Status,
-        ViewHash: snapshot.StateHash, Payload: snapshot.Payload,
-    }, nil
-}
-
-func (Module) ProjectDelta(_ any, _ any, delta game.Delta, _ game.Viewer) (game.ViewDelta, error) {
-    return game.ViewDelta{
-        Type: delta.Type, CommandType: delta.CommandType,
-        Status: delta.Status, ViewHash: delta.StateHash, Payload: delta.Payload,
-    }, nil
-}
-
-func (Module) Apply(raw any, command game.Command) (any, game.Delta, error) {
-    state, err := stateFrom(raw)
-    if err != nil {
-        return raw, game.Delta{}, err
-    }
-    if command.PlayerID == "" {
-        return raw, game.Delta{}, fmt.Errorf("player id must not be empty")
-    }
-    if command.Type != game.CommandAdd {
-        return raw, game.Delta{}, game.ErrInvalidCommand
-    }
-
-    add, err := addFrom(command.Payload)
-    if err != nil {
-        return raw, game.Delta{}, err
-    }
-    if add.Amount > 0 && state.Value > math.MaxInt64-add.Amount {
-        return raw, game.Delta{}, fmt.Errorf("counter overflow")
-    }
-    if add.Amount < 0 && state.Value < math.MinInt64-add.Amount {
-        return raw, game.Delta{}, fmt.Errorf("counter underflow")
-    }
-
-    next := *state
-    next.Value += add.Amount
-
-    base := game.Delta{
-        Type:           game.TypeCounter,
-        CommandType:    game.CommandAdd,
-        Status:         game.StatusActive,
-        StateHash:      stateHash(next.Value),
-        CommandPayload: add,
-    }
-    payload := Delta{
-        Delta:  base,
-        Amount: add.Amount,
-        Value:  next.Value,
-    }
-    base.Payload = payload
-    return &next, base, nil
-}
-
-func stateFrom(raw any) (*State, error) {
-    state, ok := raw.(*State)
-    if !ok || state == nil {
-        return nil, fmt.Errorf("%w: %T", game.ErrUnsupportedState, raw)
-    }
-    return state, nil
-}
-
-func addFrom(raw any) (Add, error) {
-    switch payload := raw.(type) {
-    case Add:
-        return payload, nil
-    case *Add:
-        if payload != nil {
-            return *payload, nil
+          "name": "profiles",
+          "columns": [
+            {"name":"player_id","type":"string","primary_key":true},
+            {"name":"rating","type":"int64"}
+          ]
         }
+      ]
     }
-    return Add{}, fmt.Errorf("%w: expected counter.Add, got %T", game.ErrInvalidCommand, raw)
+  ]
 }
-
-func stateHash(value int64) uint64 {
-    var bytes [8]byte
-    binary.LittleEndian.PutUint64(bytes[:], uint64(value))
-    hash := fnv.New64a()
-    _, _ = hash.Write(bytes[:])
-    return hash.Sum64()
-}
-
-func (Module) MarshalCommandPayload(
-    _ context.Context,
-    commandType game.CommandType,
-    payload any,
-) ([]byte, error) {
-    if commandType != game.CommandAdd {
-        return nil, nil
-    }
-    add, err := addFrom(payload)
-    if err != nil {
-        return nil, err
-    }
-    return json.Marshal(add)
-}
-
-func (Module) UnmarshalCommandPayload(
-    _ context.Context,
-    commandType game.CommandType,
-    payload []byte,
-) (any, error) {
-    if commandType != game.CommandAdd || len(payload) == 0 {
-        return nil, nil
-    }
-    var add Add
-    if err := json.Unmarshal(payload, &add); err != nil {
-        return nil, fmt.Errorf("decode counter add: %w", err)
-    }
-    return add, nil
-}
-
-var _ game.Module = Module{}
-var _ game.CommandPayloadCodec = Module{}
 ```
 
-Обратите внимание на копирование `next := *state`. Если изменить исходный указатель до durable append, ошибка БД оставит комнату в частично применённом состоянии.
+Разрешены только добавления таблиц с типами `string`, `int64`, `float64`,
+`bool`, `timestamp`, `json`. Raw SQL, DROP/ALTER и credentials не принимаются.
 
-## 14. Собственная схема БД authoritative-модуля
+## 10. Добавьте conformance vectors
 
-Реализуйте `DatabaseDefinition`, чтобы при старте Ruleshift создал отдельную БД модуля и применил его миграции:
+Vectors обязательны. Они должны содержать initial state, joins, минимум одну
+последовательность команд и private/public projections. Для каждого результата
+указывается SHA-256 serialized protobuf bytes.
 
-```go
-func (Module) DatabaseDefinition() game.DatabaseDefinition {
-    return game.DatabaseDefinition{
-        Name: "counter",
-        Migrations: []game.DatabaseMigration{
-            {
-                Version: 1,
-                Name:    "create_counter_room_metadata",
-                SQL: `CREATE TABLE counter_room_metadata (
-    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
-    label TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL
-);`,
-            },
-        },
-    }
-}
-
-var _ game.DatabaseModule = Module{}
-```
-
-Правила миграций:
-
-- `Name` соответствует `^[a-z][a-z0-9_]{0,47}$`;
-- version положительный и уникальный внутри модуля;
-- миграции только forward-only;
-- применённый SQL и name нельзя редактировать;
-- изменение применённой миграции обнаруживается по SHA-256 checksum;
-- следующая миграция получает новую version: 2, 3 и так далее;
-- идентификаторы и SQL встроенного модуля считаются доверенным серверным кодом.
-
-Пример второй миграции:
-
-```go
+```json
 {
-    Version: 2,
-    Name:    "add_counter_room_description",
-    SQL: `ALTER TABLE counter_room_metadata
-ADD COLUMN description TEXT;`,
+  "room_id": "conformance-room",
+  "seed": 42,
+  "now_unix_ms": 1700000000000,
+  "initial_state_sha256": "...64 hex...",
+  "steps": [
+    {
+      "kind": "join",
+      "player_id": "p1",
+      "expected_state_sha256": "...",
+      "expected_delta_sha256": "..."
+    },
+    {
+      "kind": "command",
+      "player_id": "p1",
+      "type_url": "type.googleapis.com/acme.mygame.v1.PlayCommand",
+      "payload_base64": "CAc=",
+      "expected_state_sha256": "...",
+      "expected_delta_sha256": "..."
+    }
+  ],
+  "projections": [
+    {"player_id":"p1","join_mode":"player","scope":"player","expected_view_sha256":"..."},
+    {"player_id":"viewer","join_mode":"spectator","scope":"public","expected_view_sha256":"..."}
+  ]
 }
 ```
 
-> Таблицы модуля не обновляются reducer автоматически. Authoritative room state сохраняется в `room_events`. Для custom-таблицы нужен явный repository/projector, вызываемый серверной инфраструктурой, а не игровым клиентом.
+Ruleshift выполняет vectors дважды и сравнивает все state/delta/view bytes. Любая
+недетерминированность блокирует activation.
 
-## 15. Зачем нужен CommandPayloadCodec
+## 11. Соберите и опубликуйте OCI image
 
-`room_events.command_payload` хранится как JSON. При replay reducer должен получить тот же конкретный Go type, который он получал при live-команде.
-
-Без codec стандартный JSON decode вернёт `map[string]any`, а `Apply` ожидает `counter.Add`. Replay завершится ошибкой.
-
-Поэтому модуль с payload реализует:
-
-```go
-type CommandPayloadCodec interface {
-    MarshalCommandPayload(ctx context.Context, commandType CommandType, payload any) ([]byte, error)
-    UnmarshalCommandPayload(ctx context.Context, commandType CommandType, payload []byte) (any, error)
-}
-```
-
-Команды без payload могут возвращать `nil, nil`.
-
-## 16. Расширение protobuf-протокола
-
-Добавьте значения и сообщения в `internal/protocol/proto/ruleshift.proto`:
-
-```proto
-enum GameType {
-  GAME_TYPE_UNSPECIFIED = 0;
-  GAME_TYPE_XIANGQI = 1;
-  GAME_TYPE_COUNTER = 2;
-}
-
-enum GameCommandType {
-  GAME_COMMAND_TYPE_UNSPECIFIED = 0;
-  GAME_COMMAND_TYPE_DO_MOVE = 1;
-  GAME_COMMAND_TYPE_RESIGN = 2;
-  GAME_COMMAND_TYPE_OFFER_DRAW = 3;
-  GAME_COMMAND_TYPE_ADD = 4;
-}
-
-message CounterAdd {
-  int64 amount = 1;
-}
-
-message CounterSnapshot {
-  int64 value = 1;
-  uint64 state_hash = 2;
-}
-
-message CounterDelta {
-  int64 amount = 1;
-  int64 value = 2;
-  uint64 state_hash = 3;
-}
-```
-
-Расширьте `GameCommand`:
-
-```proto
-message GameCommand {
-  string room_id = 1;
-  uint64 expected_revision = 2;
-
-  oneof command {
-    DoMove do_move = 10;
-    Resign resign = 11;
-    OfferDraw offer_draw = 12;
-    CounterAdd counter_add = 13;
-  }
-}
-```
-
-Расширьте `StateSnapshot.state` и `StateDelta.delta` новыми oneof-полями. Не меняйте номера существующих полей.
-
-Перегенерируйте bindings:
+Контейнер должен слушать gRPC на `:50051`, работать без root и принимать token
+из `RULESHIFT_MODULE_RPC_TOKEN`.
 
 ```powershell
-.\scripts\proto.ps1
+docker build -t registry.example.com/acme/mygame:1.0.0 .
+docker push registry.example.com/acme/mygame:1.0.0
+docker inspect --format='{{index .RepoDigests 0}}' registry.example.com/acme/mygame:1.0.0
 ```
 
-После изменения `.proto` commit должен включать:
+Результат должен содержать digest:
 
-- исходный `ruleshift.proto`;
-- обновлённый Go binding;
-- обновлённый C# binding, если он используется Unity SDK.
-
-## 17. Адаптация gateway
-
-В `internal/gateway/gateway.go` функция `toRoomGameCommand` должна преобразовать protobuf payload в module payload:
-
-```go
-case *ruleshiftv1.GameCommand_CounterAdd:
-    if typed.CounterAdd == nil {
-        return room.GameCommand{}, fmt.Errorf("counter_add must not be nil")
-    }
-    command.Type = game.CommandAdd
-    command.Payload = counter.Add{
-        Amount: typed.CounterAdd.GetAmount(),
-    }
+```text
+registry.example.com/acme/mygame@sha256:0123...
 ```
 
-В `internal/room/session.go` добавьте преобразования snapshot и delta:
+Tag-only reference (`:latest`, `:1.0.0`) API отклоняет.
 
-```go
-switch snapshot.Game.Type {
-case game.TypeXiangqi:
-    // существующее преобразование
-case game.TypeCounter:
-    state.State = &ruleshiftv1.StateSnapshot_Counter{
-        Counter: toProtoCounterSnapshot(snapshot.Game),
-    }
-}
-```
-
-Аналогично:
-
-- добавьте `game.TypeCounter` в `toProtoGameType`;
-- добавьте `game.CommandAdd` в `toProtoCommandType`;
-- реализуйте `toProtoCounterSnapshot`;
-- реализуйте `toProtoCounterDelta`;
-- добавьте тесты protobuf-конвертации.
-
-## 18. Подключение модуля к gateway
-
-Текущая версия создаёт один `room.Registry` с одним `GameModule` на процесс. Для запуска Counter замените wiring в `cmd/gateway/main.go`:
-
-```go
-gameModule := counter.NewModule()
-```
-
-Остальная цепочка остаётся прежней:
-
-```go
-moduleStore, err := platform.ProvisionModule(ctx, gameModule)
-
-registry := room.NewRegistry(room.RuntimeConfig{
-    InputQueueSize: cfg.RoomInputQueueSize,
-    EventStore:     moduleStore,
-    GameModule:     gameModule,
-})
-```
-
-> Текущее ограничение: один gateway process обслуживает один authoritative game module. Для одновременной работы Xiangqi и Counter потребуется registry/router по module key или отдельный gateway deployment на модуль. Простого добавления второго `NewModule()` недостаточно.
-
-## ViewScope и неполная информация
-
-`RoomRuntime` хранит полное authoritative-состояние, а клиенту отправляет только результат `ProjectSnapshot` или `ProjectDelta`. Gateway передаёт модулю уже вычисленный `game.Viewer`: модуль не должен читать scope, роль или player id из command payload.
-
-Семантика scope фиксирована:
-
-- `ViewScopePlayer` видит публичные данные и приватные поля только своего `PlayerID`;
-- `ViewScopePublic` не видит приватные поля ни одного игрока;
-- `ViewScopeFull` видит полное состояние только в сочетании с `JoinModeSpectator`; permission для него подтверждает auth provider;
-- `ViewScopeUnspecified` и неизвестные значения работают fail-closed и не раскрывают приватные поля.
-
-Используйте общие helpers вместо самостоятельной проверки enum:
-
-```go
-if viewer.CanSeePrivateOf(ownerPlayerID) {
-    projected.Secret = &secret // presence означает, что поле разрешено видеть
-}
-
-if viewer.CanSeeFullState() {
-    // trusted spectator only
-}
-```
-
-Минимальный шаблон проекции:
-
-```go
-func (Module) ProjectSnapshot(raw any, viewer game.Viewer) (game.ViewSnapshot, error) {
-    state, err := stateFrom(raw)
-    if err != nil {
-        return game.ViewSnapshot{}, err
-    }
-    payload := buildVisibleSnapshot(state, viewer)
-    return game.ViewSnapshot{
-        Type:     game.TypeExample,
-        Status:   state.Status,
-        ViewHash: hashVisibleSnapshot(payload),
-        Payload:  payload,
-    }, nil
-}
-
-func (Module) ProjectDelta(before, after any, canonical game.Delta, viewer game.Viewer) (game.ViewDelta, error) {
-    beforeView := buildVisibleSnapshot(mustState(before), viewer)
-    afterView := buildVisibleSnapshot(mustState(after), viewer)
-    result := game.ViewDelta{
-        Type:        canonical.Type,
-        CommandType: canonical.CommandType,
-        Status:      canonical.Status,
-        ViewHash:    hashVisibleSnapshot(afterView),
-    }
-    if hashVisibleSnapshot(beforeView) == result.ViewHash {
-        result.NoVisibleChange = true
-        return result, nil
-    }
-    result.Payload = buildVisibleDelta(canonical, viewer)
-    return result, nil
-}
-```
-
-`view_hash` вычисляется после фильтрации и не зависит от скрытых данных. Canonical `Snapshot`, `Delta` и `StateHash` предназначены только для event log и replay; не передавайте их protobuf serializer и не используйте canonical hash на клиенте. Для optional scalar в protobuf проверяйте presence, а не специальное значение вроде нуля.
-
-Обязательная тестовая матрица модуля: оба seated player, public spectator, trusted spectator, unspecified scope, сочетание `FULL + PLAYER` и попытка передать scope через клиентскую команду. Тест должен проверять отсутствие приватного protobuf-поля, разные `view_hash` там, где проекции различаются, и `no_visible_change` для скрытого изменения.
-
-Рабочий пример находится в `internal/game/hiddennumber`.
-
-## 19. Минимальные тесты authoritative-модуля
-
-Создайте `internal/game/counter/module_test.go`:
-
-```go
-package counter
-
-import (
-    "context"
-    "testing"
-    "time"
-
-    "github.com/Ruleshift/server/internal/game"
-)
-
-func TestModuleAppliesAddWithoutMutatingInput(t *testing.T) {
-    module := NewModule()
-    original, err := module.NewState(time.Unix(100, 0).UTC())
-    if err != nil {
-        t.Fatal(err)
-    }
-
-    next, delta, err := module.Apply(original, game.Command{
-        PlayerID: "player-1",
-        Type:     game.CommandAdd,
-        Payload:  Add{Amount: 5},
-        At:       time.Unix(101, 0).UTC(),
-    })
-    if err != nil {
-        t.Fatal(err)
-    }
-
-    originalSnapshot, _ := module.Snapshot(original)
-    nextSnapshot, _ := module.Snapshot(next)
-    originalPayload := originalSnapshot.Payload.(Snapshot)
-    nextPayload := nextSnapshot.Payload.(Snapshot)
-
-    if originalPayload.Value != 0 {
-        t.Fatalf("original value = %d, want 0", originalPayload.Value)
-    }
-    if nextPayload.Value != 5 {
-        t.Fatalf("next value = %d, want 5", nextPayload.Value)
-    }
-    if delta.CommandType != game.CommandAdd {
-        t.Fatalf("command type = %d, want add", delta.CommandType)
-    }
-}
-
-func TestCommandPayloadRoundTrip(t *testing.T) {
-    module := NewModule()
-    encoded, err := module.MarshalCommandPayload(
-        context.Background(),
-        game.CommandAdd,
-        Add{Amount: 7},
-    )
-    if err != nil {
-        t.Fatal(err)
-    }
-
-    decoded, err := module.UnmarshalCommandPayload(
-        context.Background(),
-        game.CommandAdd,
-        encoded,
-    )
-    if err != nil {
-        t.Fatal(err)
-    }
-
-    add, ok := decoded.(Add)
-    if !ok || add.Amount != 7 {
-        t.Fatalf("decoded = %#v, want Add{Amount: 7}", decoded)
-    }
-}
-```
-
-Также нужны тесты:
-
-- invalid payload не меняет state;
-- неизвестная команда возвращает `game.ErrInvalidCommand`;
-- overflow/underflow отклоняются;
-- state hash одинаков для одинакового state;
-- replay events восстанавливает revision и state hash;
-- snapshot/delta корректно преобразуются в protobuf;
-- WebSocket integration test отправляет новую protobuf-команду;
-- миграции имеют уникальные версии.
-
-Запуск:
+## 12. Зарегистрируйте private registry credential
 
 ```powershell
-go test ./internal/game/counter
-go test ./internal/room
-go test ./internal/gateway
-go test ./...
-go vet ./...
+$headers = @{ Authorization = "Bearer $env:RULESHIFT_DEVELOPER_API_KEY" }
+$body = @{
+  server = "registry.example.com"
+  username = "ci-user"
+  token = $env:REGISTRY_TOKEN
+} | ConvertTo-Json
+
+Invoke-RestMethod -Method Put `
+  -Uri "$env:RULESHIFT_URL/v2/developer/registry-credentials/main" `
+  -Headers $headers -ContentType application/json -Body $body
 ```
 
-## 20. Benchmarks для hot path
+Credential хранится только как Kubernetes `dockerconfigjson` Secret в tenant
+namespace. Он не возвращается API, не пишется в PostgreSQL и не логируется.
+Кластер обязан использовать encryption-at-rest для Secrets.
 
-Для команды модуля добавьте benchmark reducer:
+## 13. Создайте module key и опубликуйте version
 
-```go
-func BenchmarkApplyAdd(b *testing.B) {
-    module := NewModule()
-    state, _ := module.NewState(time.Unix(100, 0).UTC())
-    command := game.Command{
-        PlayerID: "player-1",
-        Type:     game.CommandAdd,
-        Payload:  Add{Amount: 1},
-    }
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri "$env:RULESHIFT_URL/v2/developer/modules" `
+  -Headers $headers -ContentType application/json `
+  -Body '{"key":"mygame","display_name":"My Game"}'
 
-    b.ReportAllocs()
-    for i := 0; i < b.N; i++ {
-        var err error
-        state, _, err = module.Apply(state, command)
-        if err != nil {
-            b.Fatal(err)
-        }
-    }
-}
+curl.exe -X POST `
+  -H "Authorization: Bearer $env:RULESHIFT_DEVELOPER_API_KEY" `
+  -F "manifest=@manifest.json;type=application/json" `
+  -F "descriptor_set=@descriptor.pb;type=application/octet-stream" `
+  -F "conformance_vectors=@conformance.json;type=application/json" `
+  -F "oci_reference=registry.example.com/acme/mygame@sha256:..." `
+  -F "registry_credential=main" `
+  "$env:RULESHIFT_URL/v2/developer/modules/mygame/versions"
 ```
 
-Проверяйте:
+Lifecycle: `validating -> active` или `validating -> failed`. Успешная версия
+активируется автоматически; предыдущая active становится inactive.
 
-- allocations на command apply;
-- размер snapshot и delta;
-- отсутствие reflection в reducer;
-- отсутствие неограниченных slice/map;
-- стабильность времени выполнения при росте state.
+## 14. Создайте комнату
 
-## 21. Чек-лист готовности authoritative-модуля
+Комнату создаёт trusted backend, не player build:
 
-- [ ] Добавлен уникальный `game.Type`.
-- [ ] Добавлены необходимые `game.CommandType`.
-- [ ] `NewState`, `PlayerJoined`, `Snapshot`, `Apply` реализованы.
-- [ ] `PlayerJoined` и `Apply` не мутируют входной state.
-- [ ] Все команды проверяют server-side identity и правила игры.
-- [ ] State hash детерминирован.
-- [ ] Payload codec обеспечивает replay конкретного Go type.
-- [ ] Database migrations forward-only и имеют уникальные versions.
-- [ ] Protobuf расширен без изменения старых field numbers.
-- [ ] Gateway преобразует новый command payload.
-- [ ] Snapshot и delta сериализуются в protobuf.
-- [ ] Module подключён к `cmd/gateway`.
-- [ ] Есть reducer, replay, protocol и WebSocket тесты.
-- [ ] Добавлен benchmark hot path.
-- [ ] Выполнены `go test ./...` и `go vet ./...`.
-- [ ] Обновлены README и protocol/architecture docs.
-
-## 22. Частые ошибки
-
-### Изменение state до durable append
-
-Плохо:
-
-```go
-state.Value += amount
-return state, delta, nil
+```powershell
+$room = Invoke-RestMethod -Method Post `
+  -Uri "$env:RULESHIFT_URL/v2/rooms" `
+  -Headers $headers -ContentType application/json `
+  -Body '{"module_id":"mygame"}'
 ```
 
-Хорошо:
+Без `version` выбирается active version. Можно явно указать healthy active или
+inactive version. Комната навсегда закрепляется за developer/module/version/image
+digest. Публикация 1.1.0 не переключит уже созданную комнату 1.0.0.
 
-```go
-next := *state
-next.Value += amount
-return &next, delta, nil
+## 15. Подключите player client
+
+Player WebSocket endpoint: `/v2/ws`. Все frames — binary protobuf
+`ruleshift.v2.ClientEnvelope`/`ServerEnvelope`.
+
+1. отправьте `AuthRequest` с `protocol_version = 2`;
+2. отправьте `JoinRoomRequest` с заранее созданным `room_id`;
+3. упакуйте generated module command в `google.protobuf.Any`;
+4. отправьте `GameCommand` с `expected_revision`;
+5. распаковывайте snapshot/delta по type URL descriptor модуля.
+
+Protocol v1 намеренно не поддерживается.
+
+## 16. Готовые примеры
+
+Репозиторий содержит три внешних примера:
+
+- `examples/modules/xiangqi`;
+- `examples/modules/hiddennumber`;
+- `examples/modules/cardgame`.
+
+У каждого есть module proto, manifest, Dockerfile и проверенные conformance
+vectors. Общий Go host находится в `examples/modules/runtime`; production core
+его не импортирует.
+
+## 17. Диагностика
+
+- `validation_failed: Describe ...` — manifest и код контейнера расходятся;
+- `module is nondeterministic` — используете wall clock, random или map iteration;
+- `module_unavailable` — обе replicas не готовы или RPC превысил deadline;
+- `command_rejected` — модуль отклонил пользовательскую команду;
+- `wrong state type` — возвращён не объявленный `state_type_url`;
+- `payload ... maximum` — превышен лимит state/command/delta/view;
+- после трёх protocol violations за 60 секунд версия становится `degraded`, и
+  новые комнаты используют последнюю healthy inactive version.
+
+Для полного сброса pre-production PostgreSQL данных:
+
+```powershell
+docker compose down -v
 ```
-
-### Хранение только snapshot без events
-
-Snapshot полезен для reconnect, но authoritative recovery строится на ordered event stream. Не принимайте snapshot от клиента как источник истины.
-
-### Отсутствие payload codec
-
-Live-команда может работать, но replay после рестарта получит `map[string]any` и упадёт. Добавляйте round-trip test codec.
-
-### Изменение применённой миграции
-
-Не исправляйте migration version 1 задним числом. Создайте version 2.
-
-### Секрет developer API key в player build
-
-Developer SDK предназначен для Editor, CI и trusted backend. Player использует auth ticket и protobuf WebSocket API.
-
-### Попытка зарегистрировать несколько authoritative-модулей в одном Registry
-
-`room.Registry` сейчас хранит один `RuntimeConfig.GameModule`. Для нескольких игр нужен явный router/registry архитектурный слой.
-
-## 23. Полезные файлы проекта
-
-| Назначение | Путь |
-| --- | --- |
-| Контракт game module | `internal/game/game.go` |
-| Пример Xiangqi | `internal/game/xiangqi/module.go` |
-| Тесты Xiangqi | `internal/game/xiangqi/module_test.go` |
-| Room reducer integration | `internal/room/command.go` |
-| Event replay | `internal/room/replay.go` |
-| Protobuf schema | `internal/protocol/proto/ruleshift.proto` |
-| Protobuf adapters | `internal/room/session.go` |
-| Gateway command adapter | `internal/gateway/gateway.go` |
-| Gateway wiring | `cmd/gateway/main.go` |
-| Developer Go SDK | `pkg/ruleshift` |
-| Unity package | `sdk/unity/com.ruleshift.developer` |
-| OpenAPI | `api/developer.openapi.yaml` |
-| Database architecture | `docs/database.md` |
-| Service API guide | `docs/developer-api.md` |

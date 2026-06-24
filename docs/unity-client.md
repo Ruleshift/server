@@ -1,50 +1,33 @@
-# Unity Client Integration
+# Unity player client
 
-The Unity client skeleton lives under `unity-client/Assets/Scripts/Network`.
-
-## Dependencies
-
-- Google.Protobuf for generated C# messages.
-- NativeWebSocket installed through Unity Package Manager from `https://github.com/endel/NativeWebSocket.git#upm`.
-- Steamworks.NET or another Steamworks bridge for production Steam tickets.
+The player transport uses binary protobuf WebSocket protocol v2 at `/v2/ws`.
+Generate C# bindings from `internal/protocol/proto/ruleshift.proto` and generate
+the selected module's own protobuf bindings in the game project.
 
 ## Flow
 
-1. Connect to `ws://host:port/ws`.
-2. Send `AuthRequest` with `mock:player-1` locally.
-3. Receive `AuthOk`.
-4. Send `JoinRoomRequest` with the client's stored `last_seen_revision`.
-5. Receive `JoinRoomOk` followed by the current recipient-projected `StateSnapshot`.
-6. Send `GameCommand` messages: `DoMove`, `Resign`, or `OfferDraw`.
-7. Apply `StateDelta` in revision order.
-8. Store `lastSeenRevision` for reconnect.
+1. Connect to `ws://host:port/v2/ws`.
+2. Send `ClientEnvelope` with `protocol_version = 2` and `AuthRequest`.
+3. Join a room previously created by a trusted backend through `POST /v2/rooms`.
+4. Read `ModuleRef` and unpack snapshot/delta `Any` values with module bindings.
+5. Pack module commands into `Any` and send `GameCommand` with the latest
+   observed revision.
+6. Apply snapshots and deltas only in server revision order.
 
-## Skeleton Files
-
-- `MatchClient.cs` owns connection state, sends `AuthRequest`, `JoinRoomRequest`, game commands, applies snapshots/deltas, and keeps `LastSeenRevision` for `ReconnectAsync`.
-- `ProtocolCodec.cs` serializes `ClientEnvelope` and deserializes `ServerEnvelope` with Google.Protobuf. WebSocket sends raw protobuf bytes; the codec also includes length-prefix helpers for future transports that do not preserve message boundaries.
-- `MockAuthProvider.cs` returns `mock:player-1` style tickets for the Go mock provider. Replace it with Steamworks.NET or another Steamworks bridge in production.
-
-## Minimal Usage
+The developer API key must never ship in Unity player builds. It belongs only
+in Editor tooling, CI, or a trusted backend.
 
 ```csharp
-var client = new MatchClient();
-var auth = new MockAuthProvider("player-1");
-
-await client.ConnectAsync(new Uri("ws://localhost:8080/ws"), cancellationToken);
-await client.SendAuthRequestAsync(auth.GetTicket(), cancellationToken);
-await client.JoinRoomAsync("room-1", cancellationToken);
-await client.SendMoveAsync("h2e2", cancellationToken);
-var snapshot = await client.GetSnapshotAsync(cancellationToken);
-
-// Later, after a transport drop, this rejoins with the stored LastSeenRevision.
-await client.ReconnectAsync(new Uri("ws://localhost:8080/ws"), auth.GetTicket(), cancellationToken);
+var envelope = new ClientEnvelope {
+    ProtocolVersion = 2,
+    ClientSequence = ++sequence,
+    GameCommand = new GameCommand {
+        RoomId = roomId,
+        ExpectedRevision = revision,
+        Command = Any.Pack(moduleCommand)
+    }
+};
 ```
 
-`GetSnapshotAsync` sends a `SnapshotRequest`, waits for the server's `StateSnapshot`, stores the returned revision, and returns the authoritative Xiangqi snapshot. Apply `StateDelta` messages in revision order and ignore client-side board guesses as authoritative state.
-
-`MatchClient` uses NativeWebSocket for transport. Call `DispatchMessageQueue()` from a Unity `Update()` loop so NativeWebSocket can deliver queued messages on non-WebGL builds.
-
-Generated protobuf files will be placed in `unity-client/Assets/Scripts/Network/Generated`.
-
-
+`view_digest` is SHA-256 of the exact projected protobuf payload. It can be used
+to detect client desynchronization without exposing canonical private state.

@@ -2,9 +2,13 @@
 
 ## Project
 
-Ruleshift is a Go authoritative multiplayer state server for a future Steam-compatible Unity C# card game.
-
-The MVP is not a card game. The MVP is a coherent protobuf-based shared integer state server.
+Ruleshift is a Go authoritative multiplayer state service for game developers.
+Player clients send protobuf commands; Ruleshift orders them per room, invokes a
+developer-owned stateless game module, persists the result, and broadcasts one
+coherent revision stream.
+The core is game-agnostic. A developer can add a fourth game from a separate
+repository by publishing a gRPC/protobuf OCI image; rebuilding Ruleshift is not
+required.
 
 ## MVP
 
@@ -52,9 +56,11 @@ The server is authoritative:
 ## Package Boundaries
 
 - `internal/auth` owns identity providers and Steam-compatible auth.
-- `internal/room` owns authoritative state and command ordering.
+- `internal/roomcore` owns opaque authoritative state and command ordering.
 - `internal/protocol` owns protobuf schema, framing, and validation.
-- `internal/net` owns transport/session plumbing.
+- `internal/gatewayv2` owns protobuf WebSocket transport/session plumbing.
+- Game implementations live only in external OCI images or `examples/modules`;
+  production core must never import them.
 - `cmd/gateway` wires packages together but should not contain domain logic.
 
 ## Documentation Rules

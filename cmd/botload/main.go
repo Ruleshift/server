@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", "ws://localhost:8080/ws", "gateway WebSocket address")
+	addr := flag.String("addr", "ws://localhost:8080/v2/ws", "gateway WebSocket address")
 	players := flag.Int("players", 100, "number of simulated players")
 	rooms := flag.Int("rooms", 10, "number of target rooms")
 	duration := flag.Duration("duration", 30*time.Second, "test duration")

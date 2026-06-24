@@ -1,2 +1,0 @@
-ALTER TABLE room_events
-    ADD COLUMN view_scope SMALLINT NOT NULL DEFAULT 0;

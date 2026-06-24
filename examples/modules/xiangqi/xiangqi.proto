@@ -1,0 +1,10 @@
+syntax = "proto3";
+package ruleshift.examples.xiangqi.v1;
+option go_package = "example.com/ruleshift-xiangqi/gen;xiangqiv1";
+
+// The example keeps canonical deterministic JSON inside a module-owned protobuf
+// envelope. Real modules may model every field directly without changing the ABI.
+message State { bytes canonical_json = 1; }
+message Command { bytes canonical_json = 1; }
+message Delta { bytes canonical_json = 1; }
+message View { bytes canonical_json = 1; }

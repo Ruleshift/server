@@ -1,107 +1,56 @@
-# Protocol
+# Ruleshift protocols
 
-The MVP protocol uses WebSocket as transport and binary protobuf as payload.
+Ruleshift has two independent protobuf contracts.
 
-## Wire Format
+## Player WebSocket v2
 
-Each WebSocket binary message carries one serialized protobuf envelope. WebSocket framing provides message boundaries, so there is no extra length prefix inside the payload.
+Schema: `internal/protocol/proto/ruleshift.proto`. Endpoint: `/v2/ws`. Each
+binary WebSocket frame is exactly one serialized envelope; there is no extra
+length prefix. `protocol_version` must equal `2`; v1 is rejected.
 
-## Envelopes
+The sequence is:
 
-All client messages use `ClientEnvelope`.
+1. `AuthRequest` must be the first envelope.
+2. `JoinRoomRequest` references a room created earlier through `POST /v2/rooms`.
+3. The server sends a recipient-specific `StateSnapshot`.
+4. The player sends `GameCommand` with authenticated intent in `Any`.
+5. The server serializes the command through the room queue and broadcasts
+   recipient-specific `StateDelta` messages in revision order.
 
-All server messages use `ServerEnvelope`.
+Core messages contain no game enums or game oneofs. `ModuleRef` identifies the
+pinned module/version, while state, command and delta use `google.protobuf.Any`.
+`view_digest` is SHA-256 of the exact projected protobuf payload.
 
-The schema is in `internal/protocol/proto/ruleshift.proto`.
+An error or timeout from a module produces `module_unavailable` or
+`command_rejected` and never changes room revision.
 
-Current protobuf package:
+## Module Runtime ABI v1
 
-```proto
-package ruleshift.v1;
-option go_package = "github.com/Ruleshift/server/internal/protocol/generated/go/ruleshiftv1;ruleshiftv1";
-option csharp_namespace = "Ruleshift.Protocol.V1";
-```
+Schema: `internal/moduleruntime/proto/module_runtime.proto`. It is ordinary gRPC
+on port 50051 inside the Kubernetes cluster. The service implements `Describe`,
+`NewState`, player lifecycle, `Apply`, and projection RPCs.
 
-## Versioning
+Every request contains an `operation_id`; every transition is stateless and
+side-effect free. Ruleshift supplies authenticated `player_id`, server time,
+room revision and deterministic room seed. The module returns opaque protobuf
+bytes; Ruleshift owns persistence and revision ordering.
 
-`protocol_version` starts at `1`. The gateway rejects unsupported protocol versions before dispatching client payloads.
+Limits:
 
-## Revision Model
+- state: 1 MiB;
+- command, delta, view: 256 KiB;
+- transition deadline: 50 ms by default, never above 250 ms;
+- `NewState`: at most 250 ms;
+- one retry only for `Unavailable` within the original deadline.
 
-Room state is:
+Module traffic uses a random per-deployment bearer token stored in Kubernetes
+Secret. Player and developer credentials are never forwarded to module pods.
 
-- `room_id`
-- `revision uint64`
-- module-owned game state. The current `GAME_TYPE_XIANGQI` snapshot includes FEN, packed board pieces, side to move, seated player ids, game status, and state hash.
-- a recipient-specific `view_hash`, calculated only from fields visible to that recipient.
-
-Every accepted `GameCommand` increments revision by exactly one. Seating a new player also advances revision because it changes authoritative game state. All clients observe the same ordered revisions, but their projected payloads and `view_hash` values can differ. `no_visible_change` advances a recipient through a revision that changed no visible fields.
-
-## Game Commands
-
-Clients send `GameCommand` after auth and room join:
-
-- `DoMove` carries either compact square indexes (`from_square`, `to_square`, 0..89) or a UCI-style move string such as `h2e2`.
-- `Resign` marks the game resigned and records the winner when the player is seated.
-- `OfferDraw` records a draw offer; a later opponent offer accepts the draw.
-- `SetSecret` is used by the Hidden Number demo and is never echoed to unauthorized views.
-
-The room runtime validates `room_id` and `expected_revision`. The Xiangqi module validates seating, side to move, and legal moves through the engine before mutating state.
-
-## Join And Resume
-
-`JoinRoomRequest.join_mode` selects a player or spectator connection. The gateway, not the client, derives the effective `ViewScope`:
-
-- `PLAYER` sees public state plus that player's private fields;
-- `PUBLIC` is the default spectator view and contains no private fields;
-- `FULL` is available only to a spectator with a server-authenticated full-view permission.
-
-Every join and reconnect returns `JoinRoomOk` followed by a projected `StateSnapshot`, even when `last_seen_revision` matches. The field remains reserved for a future delta-history resume path. Reconnecting with the same authenticated `player_id` replaces the previous session and prevents the old session from mutating state.
-
-Canonical snapshots, deltas, and state hashes are server-only data used for durable events and replay. They must never be serialized as a fallback when projection fails.
-
-## Generation Plan
-
-Install:
-
-- `protoc`
-- `protoc-gen-go`
-
-Then run:
+## Generation
 
 ```powershell
-.\scripts\proto.ps1
+./scripts/proto.ps1
 ```
 
-Equivalent explicit commands:
-
-```powershell
-protoc -I . --go_out=. --go_opt=module=github.com/Ruleshift/server internal/protocol/proto/ruleshift.proto
-protoc -I . --csharp_out=unity-client/Assets/Scripts/Network/Generated internal/protocol/proto/ruleshift.proto
-```
-
-`protoc` is installed through WinGet. The repository includes `scripts/proto.ps1`, which prepends the WinGet install path before running generation, so codegen works even if the already-running shell has not refreshed PATH.
-
-## Generated Bindings
-
-The generated Go package is:
-
-```go
-github.com/Ruleshift/server/internal/protocol/generated/go/ruleshiftv1
-```
-
-Gateway code uses `internal/protocol` encode/decode helpers, which delegate directly to the generated protobuf runtime.
-
-## Error Handling
-
-Oversized WebSocket frames are rejected by the transport. Malformed protobuf payloads are rejected while decoding `ClientEnvelope`. The gateway and room runtime reject invalid application requests:
-
-- unsupported protocol version;
-- missing payload;
-- unexpected payload for the connection state;
-- empty room IDs or auth tickets;
-- invalid or illegal game command;
-- stale replaced sessions;
-- stale or mismatched room revisions.
-
-
+Generated Go packages are `ruleshiftv2` and `moduleruntimev1`. Module authors
+generate ABI bindings and their own game proto bindings in their own repository.

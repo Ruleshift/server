@@ -14,9 +14,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/Ruleshift/server/internal/game"
 )
+
+type databaseMigration struct {
+	Version uint64
+	Name    string
+	SQL     string
+}
 
 //go:embed migrations/control/*.sql migrations/module/*.sql
 var migrationFiles embed.FS
@@ -32,13 +36,13 @@ const createMigrationTableSQL = `CREATE TABLE IF NOT EXISTS ruleshift_schema_mig
     PRIMARY KEY (component, version)
 )`
 
-func embeddedMigrations(directory string) ([]game.DatabaseMigration, error) {
+func embeddedMigrations(directory string) ([]databaseMigration, error) {
 	entries, err := fs.ReadDir(migrationFiles, directory)
 	if err != nil {
 		return nil, fmt.Errorf("read embedded migrations %q: %w", directory, err)
 	}
 
-	migrations := make([]game.DatabaseMigration, 0, len(entries))
+	migrations := make([]databaseMigration, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".sql" {
 			continue
@@ -55,7 +59,7 @@ func embeddedMigrations(directory string) ([]game.DatabaseMigration, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read migration %q: %w", entry.Name(), err)
 		}
-		migrations = append(migrations, game.DatabaseMigration{
+		migrations = append(migrations, databaseMigration{
 			Version: version,
 			Name:    parts[1],
 			SQL:     string(body),
@@ -64,14 +68,7 @@ func embeddedMigrations(directory string) ([]game.DatabaseMigration, error) {
 	return migrations, nil
 }
 
-func validateDefinition(definition game.DatabaseDefinition) error {
-	if !definitionNamePattern.MatchString(definition.Name) {
-		return fmt.Errorf("module database name %q must match %s", definition.Name, definitionNamePattern)
-	}
-	return validateMigrations(definition.Migrations)
-}
-
-func validateMigrations(migrations []game.DatabaseMigration) error {
+func validateMigrations(migrations []databaseMigration) error {
 	versions := make(map[uint64]struct{}, len(migrations))
 	for _, migration := range migrations {
 		if migration.Version == 0 {
@@ -91,7 +88,7 @@ func validateMigrations(migrations []game.DatabaseMigration) error {
 	return nil
 }
 
-func applyMigrations(ctx context.Context, db *sql.DB, component string, migrations []game.DatabaseMigration) error {
+func applyMigrations(ctx context.Context, db *sql.DB, component string, migrations []databaseMigration) error {
 	if !definitionNamePattern.MatchString(component) {
 		return fmt.Errorf("migration component %q must match %s", component, definitionNamePattern)
 	}
@@ -102,7 +99,7 @@ func applyMigrations(ctx context.Context, db *sql.DB, component string, migratio
 		return fmt.Errorf("create migration table: %w", err)
 	}
 
-	ordered := append([]game.DatabaseMigration(nil), migrations...)
+	ordered := append([]databaseMigration(nil), migrations...)
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Version < ordered[j].Version })
 	for _, migration := range ordered {
 		if err := applyMigration(ctx, db, component, migration); err != nil {
@@ -112,7 +109,7 @@ func applyMigrations(ctx context.Context, db *sql.DB, component string, migratio
 	return nil
 }
 
-func applyMigration(ctx context.Context, db *sql.DB, component string, migration game.DatabaseMigration) error {
+func applyMigration(ctx context.Context, db *sql.DB, component string, migration databaseMigration) error {
 	sum := sha256.Sum256([]byte(migration.SQL))
 	checksum := hex.EncodeToString(sum[:])
 

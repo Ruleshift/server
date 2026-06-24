@@ -1,0 +1,97 @@
+syntax = "proto3";
+
+package ruleshift.module.v1;
+
+import "google/protobuf/any.proto";
+
+option go_package = "github.com/Ruleshift/server/internal/moduleruntime/generated/moduleruntimev1;moduleruntimev1";
+option csharp_namespace = "Ruleshift.Module.V1";
+
+service ModuleRuntime {
+  rpc Describe(DescribeRequest) returns (DescribeResponse);
+  rpc NewState(NewStateRequest) returns (TransitionResponse);
+  rpc PlayerJoined(PlayerTransitionRequest) returns (TransitionResponse);
+  rpc PlayerLeft(PlayerTransitionRequest) returns (TransitionResponse);
+  rpc Apply(ApplyRequest) returns (TransitionResponse);
+  rpc ProjectSnapshot(ProjectRequest) returns (ProjectionResponse);
+  rpc ProjectDelta(ProjectDeltaRequest) returns (ProjectionResponse);
+}
+
+enum JoinMode {
+  JOIN_MODE_UNSPECIFIED = 0;
+  JOIN_MODE_PLAYER = 1;
+  JOIN_MODE_SPECTATOR = 2;
+}
+
+enum ViewScope {
+  VIEW_SCOPE_UNSPECIFIED = 0;
+  VIEW_SCOPE_PLAYER = 1;
+  VIEW_SCOPE_PUBLIC = 2;
+  VIEW_SCOPE_FULL = 3;
+}
+
+message Viewer {
+  string player_id = 1;
+  JoinMode join_mode = 2;
+  ViewScope scope = 3;
+}
+
+message RoomContext {
+  string operation_id = 1;
+  string room_id = 2;
+  uint64 revision = 3;
+  int64 now_unix_ms = 4;
+  uint64 seed = 5;
+}
+
+message DescribeRequest {}
+
+message DescribeResponse {
+  string module_id = 1;
+  string version = 2;
+  uint32 abi_version = 3;
+  string state_type_url = 4;
+  repeated string command_type_urls = 5;
+  bytes descriptor_set_sha256 = 6;
+  bool supports_player_left = 7;
+}
+
+message NewStateRequest { RoomContext context = 1; }
+
+message PlayerTransitionRequest {
+  RoomContext context = 1;
+  google.protobuf.Any state = 2;
+  string player_id = 3;
+}
+
+message ApplyRequest {
+  RoomContext context = 1;
+  google.protobuf.Any state = 2;
+  string player_id = 3;
+  google.protobuf.Any command = 4;
+}
+
+message TransitionResponse {
+  bool changed = 1;
+  google.protobuf.Any next_state = 2;
+  google.protobuf.Any delta = 3;
+}
+
+message ProjectRequest {
+  RoomContext context = 1;
+  google.protobuf.Any state = 2;
+  Viewer viewer = 3;
+}
+
+message ProjectDeltaRequest {
+  RoomContext context = 1;
+  google.protobuf.Any before_state = 2;
+  google.protobuf.Any after_state = 3;
+  google.protobuf.Any delta = 4;
+  Viewer viewer = 5;
+}
+
+message ProjectionResponse {
+  google.protobuf.Any payload = 1;
+  bool no_visible_change = 2;
+}
