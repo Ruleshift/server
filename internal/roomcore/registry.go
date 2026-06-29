@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/Ruleshift/server/internal/metrics"
 	"github.com/Ruleshift/server/internal/module"
 )
 
@@ -17,6 +18,7 @@ type Registry struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	rooms     map[string]*Runtime
+	observer  metrics.Observer
 }
 
 func NewRegistry(store Store, resolver module.Resolver, queueSize int) (*Registry, error) {
@@ -24,7 +26,18 @@ func NewRegistry(store Store, resolver module.Resolver, queueSize int) (*Registr
 		return nil, fmt.Errorf("room store and module resolver are required")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Registry{store: store, resolver: resolver, queueSize: queueSize, ctx: ctx, cancel: cancel, rooms: make(map[string]*Runtime)}, nil
+	return &Registry{store: store, resolver: resolver, queueSize: queueSize, ctx: ctx, cancel: cancel, rooms: make(map[string]*Runtime), observer: metrics.NopRecorder{}}, nil
+}
+
+// SetObserver installs bounded hot-path metrics. It is intended to be called
+// during process wiring before rooms are created.
+func (r *Registry) SetObserver(observer metrics.Observer) {
+	if observer == nil {
+		observer = metrics.NopRecorder{}
+	}
+	r.mu.Lock()
+	r.observer = observer
+	r.mu.Unlock()
 }
 
 func (r *Registry) Create(ctx context.Context, route Route) (*Runtime, error) {
@@ -42,7 +55,7 @@ func (r *Registry) Create(ctx context.Context, route Route) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	room, err := Create(ctx, route, RuntimeConfig{QueueSize: r.queueSize, Store: r.store, Module: runtime})
+	room, err := Create(ctx, route, RuntimeConfig{QueueSize: r.queueSize, Store: r.store, Module: runtime, Metrics: r.observer})
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +78,7 @@ func (r *Registry) Get(ctx context.Context, roomID string) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	room, err := Restore(ctx, route, RuntimeConfig{QueueSize: r.queueSize, Store: r.store, Module: runtime})
+	room, err := Restore(ctx, route, RuntimeConfig{QueueSize: r.queueSize, Store: r.store, Module: runtime, Metrics: r.observer})
 	if err != nil {
 		return nil, err
 	}
@@ -76,3 +89,27 @@ func (r *Registry) Get(ctx context.Context, roomID string) (*Runtime, error) {
 
 func (r *Registry) Close()         { r.cancel() }
 func (r *Registry) RoomCount() int { r.mu.Lock(); defer r.mu.Unlock(); return len(r.rooms) }
+
+func (r *Registry) Diagnostics() []Diagnostic {
+	r.mu.Lock()
+	runtimes := make([]*Runtime, 0, len(r.rooms))
+	for _, runtime := range r.rooms {
+		runtimes = append(runtimes, runtime)
+	}
+	r.mu.Unlock()
+	values := make([]Diagnostic, 0, len(runtimes))
+	for _, runtime := range runtimes {
+		values = append(values, runtime.Diagnostic())
+	}
+	return values
+}
+
+func (r *Registry) MaxQueueSaturation() float64 {
+	maximum := 0.0
+	for _, value := range r.Diagnostics() {
+		if value.QueueSaturation > maximum {
+			maximum = value.QueueSaturation
+		}
+	}
+	return maximum
+}

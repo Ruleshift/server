@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Ruleshift/server/internal/metrics"
 	"github.com/Ruleshift/server/internal/module"
 	"github.com/Ruleshift/server/internal/roomcore"
 )
@@ -47,7 +48,7 @@ func TestMetricsHandler(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	response := httptest.NewRecorder()
 
-	metricsHandler(registry)(response, request)
+	metricsHandler(metrics.New(), registry).ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
@@ -56,7 +57,7 @@ func TestMetricsHandler(t *testing.T) {
 	if !strings.Contains(body, "ruleshift_up 1") {
 		t.Fatalf("metrics body = %q, want ruleshift_up metric", body)
 	}
-	if !strings.Contains(body, "ruleshift_rooms 0") {
-		t.Fatalf("metrics body = %q, want room count metric", body)
+	if !strings.Contains(body, "ruleshift_room_runtimes 0") {
+		t.Fatalf("metrics body = %q, want room runtime metric", body)
 	}
 }

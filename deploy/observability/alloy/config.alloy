@@ -1,0 +1,44 @@
+local.file_match "docker_logs" {
+  path_targets = [{
+    __path__ = "/var/lib/docker/containers/*/*-json.log",
+    job      = "docker",
+  }]
+}
+
+loki.source.file "docker_logs" {
+  targets    = local.file_match.docker_logs.targets
+  forward_to = [loki.process.ruleshift.receiver]
+}
+
+loki.process "ruleshift" {
+  stage.docker {}
+
+  stage.json {
+    expressions = {
+      service   = "service",
+      level     = "level",
+      component = "component",
+    }
+  }
+
+  stage.labels {
+    values = {
+      service   = "service",
+      level     = "level",
+      component = "component",
+    }
+  }
+
+  // High-cardinality identifiers remain log fields and are never labels.
+  stage.label_drop {
+    values = ["room_id", "public_room_ref", "player_id", "developer_id", "trace_id"]
+  }
+
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

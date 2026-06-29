@@ -1,0 +1,82 @@
+services:
+  prometheus:
+    image: prom/prometheus:v3.12.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules.yml:/etc/prometheus/rules.yml:ro
+      - prometheus-data:/prometheus
+    networks: [ruleshift-private]
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.7.2
+    command: -config.file=/etc/loki/config.yml
+    volumes:
+      - ./loki/config.yml:/etc/loki/config.yml:ro
+      - loki-data:/loki
+    networks: [ruleshift-private]
+    restart: unless-stopped
+
+  alloy:
+    image: grafana/alloy:v1.16.1
+    command: run /etc/alloy/config.alloy
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - alloy-data:/var/lib/alloy/data
+    networks: [ruleshift-private]
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:13.0.2
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SECURITY_ALLOW_EMBEDDING: "false"
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD}
+    ports:
+      - 127.0.0.1:3000:3000
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    networks: [ruleshift-private]
+    restart: unless-stopped
+
+  observability-api:
+    build:
+      context: ../..
+      args:
+        BINARY: ./cmd/observability-api
+    environment:
+      OBS_ADDR: :8081
+      OBS_PROMETHEUS_URL: http://prometheus:9090
+      OBS_OPERATIONS_URL: ${OBS_OPERATIONS_URL:-http://ruleshift:9091}
+      OBS_ALLOWED_ORIGIN: ${OBS_ALLOWED_ORIGIN:-https://ruleshift.github.io}
+      OBS_GRAFANA_SYSTEM_URL: ${OBS_GRAFANA_SYSTEM_URL:-}
+      OBS_GRAFANA_RUNTIME_URL: ${OBS_GRAFANA_RUNTIME_URL:-}
+      OBS_STALE_AFTER: ${OBS_STALE_AFTER:-30s}
+      OBS_UNAVAILABLE_AFTER: ${OBS_UNAVAILABLE_AFTER:-60s}
+      OBS_ERROR_RATIO_THRESHOLD: ${OBS_ERROR_RATIO_THRESHOLD:-0.01}
+      OBS_COMMAND_P95_THRESHOLD: ${OBS_COMMAND_P95_THRESHOLD:-250ms}
+      OBS_QUEUE_SATURATION_THRESHOLD: ${OBS_QUEUE_SATURATION_THRESHOLD:-0.8}
+      OBS_SLOW_CONSUMER_RATIO_THRESHOLD: ${OBS_SLOW_CONSUMER_RATIO_THRESHOLD:-0.005}
+      OBS_MIN_COMMANDS: ${OBS_MIN_COMMANDS:-100}
+    ports:
+      - 127.0.0.1:8081:8081
+    networks: [ruleshift-private]
+    restart: unless-stopped
+
+networks:
+  ruleshift-private:
+    external: true
+
+volumes:
+  prometheus-data:
+  loki-data:
+  alloy-data:
+  grafana-data:

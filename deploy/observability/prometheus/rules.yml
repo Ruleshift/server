@@ -1,0 +1,12 @@
+groups:
+  - name: ruleshift-overview
+    interval: 10s
+    rules:
+      - record: ruleshift:command_rate5m
+        expr: sum(rate(ruleshift_gateway_commands_total[5m]))
+      - record: ruleshift:server_error_ratio5m
+        expr: sum(rate(ruleshift_gateway_commands_total{result=~"error|module_unavailable|timeout"}[5m])) / clamp_min(sum(rate(ruleshift_gateway_commands_total[5m])), 1)
+      - record: ruleshift:command_p95_seconds5m
+        expr: histogram_quantile(0.95, sum by (le) (rate(ruleshift_gateway_command_duration_seconds_bucket[5m])))
+      - record: ruleshift:slow_consumer_ratio5m
+        expr: sum(rate(ruleshift_gateway_slow_consumers_total[5m])) / clamp_min(sum(rate(ruleshift_gateway_connections_opened_total[5m])), 1)

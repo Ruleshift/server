@@ -16,7 +16,9 @@ import (
 	"github.com/Ruleshift/server/internal/controlplane"
 	"github.com/Ruleshift/server/internal/developerapi"
 	"github.com/Ruleshift/server/internal/gatewayv2"
+	"github.com/Ruleshift/server/internal/metrics"
 	"github.com/Ruleshift/server/internal/module"
+	"github.com/Ruleshift/server/internal/operations"
 	"github.com/Ruleshift/server/internal/roomcore"
 	"github.com/Ruleshift/server/internal/runtimeclient"
 	schedulerkube "github.com/Ruleshift/server/internal/scheduler/kubernetes"
@@ -33,7 +35,8 @@ func main() {
 	if err != nil {
 		fatal("load config", err)
 	}
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("service", "ruleshift", "environment", cfg.Env)
+	slog.SetDefault(logger)
 	if cfg.DatabaseURL == "" {
 		fatal("start gateway", errors.New("RULESHIFT_DATABASE_URL is required by protocol v2"))
 	}
@@ -70,8 +73,10 @@ func main() {
 		fatal("create room registry", err)
 	}
 	defer rooms.Close()
+	telemetry := metrics.New()
+	rooms.SetObserver(telemetry)
 	authProvider := auth.NewPersistingProvider(auth.NewMockProvider(), platform)
-	gateway, err := gatewayv2.New(gatewayv2.Config{MaxMessageBytes: cfg.MaxMessageBytes, SessionSendQueueSize: cfg.SessionSendQueueSize, AuthTimeout: cfg.AuthTimeout}, authProvider, rooms, logger)
+	gateway, err := gatewayv2.New(gatewayv2.Config{MaxMessageBytes: cfg.MaxMessageBytes, SessionSendQueueSize: cfg.SessionSendQueueSize, AuthTimeout: cfg.AuthTimeout, Metrics: telemetry}, authProvider, rooms, logger)
 	if err != nil {
 		fatal("create gateway", err)
 	}
@@ -85,20 +90,39 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthHandler)
 	mux.HandleFunc("/readyz", readyHandler)
-	if cfg.EnableMetrics {
-		mux.HandleFunc("/metrics", metricsHandler(rooms))
-	}
 	mux.Handle("/v2/developer/", developerAPI)
 	mux.Handle("/v2/rooms", developerAPI)
 	mux.Handle("/v2/rooms/", developerAPI)
 	mux.HandleFunc(gatewayv2.WebSocketPath, gateway.HandleWebSocket)
 	server := &http.Server{Addr: cfg.Addr, Handler: mux, ReadHeaderTimeout: cfg.ReadTimeout, ReadTimeout: cfg.ReadTimeout, WriteTimeout: cfg.WriteTimeout}
+	privateMux := http.NewServeMux()
+	privateMux.HandleFunc("/healthz", healthHandler)
+	if cfg.EnableMetrics {
+		privateMux.Handle("/metrics", metricsHandler(telemetry, rooms))
+	}
+	if cfg.PublicRoomRefKey != "" {
+		refs, refErr := operations.NewRefCodec(cfg.PublicRoomRefKey)
+		if refErr != nil {
+			fatal("configure public room references", refErr)
+		}
+		privateMux.Handle("/internal/v1/", operations.NewHandler(rooms, gateway, refs, operations.Config{QueueDegradedRatio: cfg.QueueDegradedRatio}))
+	} else {
+		logger.Warn("private room diagnostics disabled", "reason", "RULESHIFT_PUBLIC_ROOM_REF_KEY is not configured")
+	}
+	privateServer := &http.Server{Addr: cfg.OperationsAddr, Handler: privateMux, ReadHeaderTimeout: cfg.ReadTimeout, ReadTimeout: cfg.ReadTimeout, WriteTimeout: cfg.WriteTimeout}
+	go func() {
+		logger.Info("starting private operations listener", "addr", cfg.OperationsAddr)
+		if privateErr := privateServer.ListenAndServe(); privateErr != nil && !errors.Is(privateErr, http.ErrServerClosed) {
+			fatal("private operations listener stopped", privateErr)
+		}
+	}()
 	go func() {
 		<-ctx.Done()
 		gateway.Close()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
+		_ = privateServer.Shutdown(shutdownCtx)
 	}()
 	logger.Info("starting Ruleshift protocol v2 gateway", "addr", cfg.Addr)
 	if err = server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -143,10 +167,13 @@ func readyHandler(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"status":"ready"}`))
 }
-func metricsHandler(registry interface{ RoomCount() int }) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, "ruleshift_up 1\nruleshift_rooms %d\n", registry.RoomCount())
-	}
+func metricsHandler(telemetry *metrics.Telemetry, registry interface {
+	RoomCount() int
+	MaxQueueSaturation() float64
+}) http.Handler {
+	handler := telemetry.Handler()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		telemetry.RefreshRooms(registry.RoomCount(), registry.MaxQueueSaturation())
+		handler.ServeHTTP(w, r)
+	})
 }

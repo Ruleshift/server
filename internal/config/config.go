@@ -9,6 +9,7 @@ import (
 
 type Config struct {
 	Addr                 string
+	OperationsAddr       string
 	Env                  string
 	DatabaseURL          string
 	DatabaseAdminURL     string
@@ -26,11 +27,14 @@ type Config struct {
 	ShutdownTimeout      time.Duration
 	EnableMetrics        bool
 	EnablePprof          bool
+	PublicRoomRefKey     string
+	QueueDegradedRatio   float64
 }
 
 func Load() (Config, error) {
 	cfg := Config{
 		Addr:                 envString("RULESHIFT_ADDR", ":8080"),
+		OperationsAddr:       envString("RULESHIFT_OPERATIONS_ADDR", "127.0.0.1:9091"),
 		Env:                  envString("RULESHIFT_ENV", "dev"),
 		DatabaseURL:          envString("RULESHIFT_DATABASE_URL", ""),
 		DatabaseAdminURL:     envString("RULESHIFT_DATABASE_ADMIN_URL", ""),
@@ -48,6 +52,8 @@ func Load() (Config, error) {
 		ShutdownTimeout:      10 * time.Second,
 		EnableMetrics:        true,
 		EnablePprof:          false,
+		PublicRoomRefKey:     envString("RULESHIFT_PUBLIC_ROOM_REF_KEY", ""),
+		QueueDegradedRatio:   0.8,
 	}
 
 	var err error
@@ -78,6 +84,9 @@ func Load() (Config, error) {
 	if cfg.EnablePprof, err = envBool("RULESHIFT_ENABLE_PPROF", cfg.EnablePprof); err != nil {
 		return Config{}, err
 	}
+	if cfg.QueueDegradedRatio, err = envFloat("RULESHIFT_QUEUE_DEGRADED_RATIO", cfg.QueueDegradedRatio); err != nil {
+		return Config{}, err
+	}
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -88,6 +97,9 @@ func Load() (Config, error) {
 func (c Config) Validate() error {
 	if c.Addr == "" {
 		return fmt.Errorf("RULESHIFT_ADDR must not be empty")
+	}
+	if c.OperationsAddr == "" {
+		return fmt.Errorf("RULESHIFT_OPERATIONS_ADDR must not be empty")
 	}
 	if c.MaxMessageBytes <= 0 {
 		return fmt.Errorf("RULESHIFT_MAX_MESSAGE_BYTES must be positive")
@@ -121,6 +133,12 @@ func (c Config) Validate() error {
 	}
 	if c.ShutdownTimeout <= 0 {
 		return fmt.Errorf("RULESHIFT_SHUTDOWN_TIMEOUT must be positive")
+	}
+	if c.QueueDegradedRatio <= 0 || c.QueueDegradedRatio > 1 {
+		return fmt.Errorf("RULESHIFT_QUEUE_DEGRADED_RATIO must be in (0,1]")
+	}
+	if c.PublicRoomRefKey != "" && len(c.PublicRoomRefKey) < 32 {
+		return fmt.Errorf("RULESHIFT_PUBLIC_ROOM_REF_KEY must be at least 32 bytes")
 	}
 	return nil
 }
@@ -164,6 +182,18 @@ func envBool(key string, fallback bool) (bool, error) {
 	parsed, err := strconv.ParseBool(value)
 	if err != nil {
 		return false, fmt.Errorf("parse %s: %w", key, err)
+	}
+	return parsed, nil
+}
+
+func envFloat(key string, fallback float64) (float64, error) {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse %s: %w", key, err)
 	}
 	return parsed, nil
 }

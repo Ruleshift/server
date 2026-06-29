@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Ruleshift/server/internal/auth"
+	"github.com/Ruleshift/server/internal/metrics"
 	"github.com/Ruleshift/server/internal/module"
 	"github.com/Ruleshift/server/internal/protocol"
 	ruleshiftv2 "github.com/Ruleshift/server/internal/protocol/generated/go/ruleshiftv2"
@@ -25,6 +26,7 @@ type Config struct {
 	MaxMessageBytes      int
 	SessionSendQueueSize int
 	AuthTimeout          time.Duration
+	Metrics              metrics.Observer
 }
 type member struct {
 	session *session
@@ -32,14 +34,15 @@ type member struct {
 }
 type hub struct{ members map[string]member }
 type Gateway struct {
-	cfg    Config
-	auth   auth.Provider
-	rooms  *roomcore.Registry
-	logger *slog.Logger
-	mu     sync.Mutex
-	hubs   map[string]*hub
-	ctx    context.Context
-	cancel context.CancelFunc
+	cfg     Config
+	auth    auth.Provider
+	rooms   *roomcore.Registry
+	logger  *slog.Logger
+	metrics metrics.Observer
+	mu      sync.Mutex
+	hubs    map[string]*hub
+	ctx     context.Context
+	cancel  context.CancelFunc
 }
 
 func New(cfg Config, provider auth.Provider, rooms *roomcore.Registry, logger *slog.Logger) (*Gateway, error) {
@@ -52,8 +55,12 @@ func New(cfg Config, provider auth.Provider, rooms *roomcore.Registry, logger *s
 	if logger == nil {
 		logger = slog.Default()
 	}
+	observer := cfg.Metrics
+	if observer == nil {
+		observer = metrics.NopRecorder{}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Gateway{cfg: cfg, auth: provider, rooms: rooms, logger: logger, hubs: map[string]*hub{}, ctx: ctx, cancel: cancel}, nil
+	return &Gateway{cfg: cfg, auth: provider, rooms: rooms, logger: logger, metrics: observer, hubs: map[string]*hub{}, ctx: ctx, cancel: cancel}, nil
 }
 func (g *Gateway) Close() {
 	g.cancel()
@@ -71,6 +78,8 @@ func (g *Gateway) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	g.metrics.ConnectionOpened()
+	defer g.metrics.ConnectionClosed()
 	defer conn.Close()
 	conn.SetReadLimit(int64(g.cfg.MaxMessageBytes))
 	ctx, cancel := context.WithCancel(r.Context())
@@ -97,10 +106,11 @@ func (g *Gateway) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}()
 	_ = conn.SetReadDeadline(time.Now().Add(g.cfg.AuthTimeout))
 	for {
-		env, readErr := g.read(conn)
+		env, payloadBytes, readErr := g.read(conn)
 		if readErr != nil {
 			return
 		}
+		g.metrics.Message("in", clientMessageType(env), "ok", payloadBytes)
 		if env.ClientSequence == 0 || env.ClientSequence <= state.lastSequence {
 			g.sendError(ctx, state.session, "bad_sequence", "client_sequence must increase")
 			continue
@@ -116,9 +126,11 @@ func (g *Gateway) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 			identity, authErr := g.auth.AuthenticateTicket(authCtx, request.Ticket)
 			authCancel()
 			if authErr != nil {
+				g.metrics.Message("in", "auth", "rejected", -1)
 				_ = state.session.Send(ctx, &ruleshiftv2.ServerEnvelope{Payload: &ruleshiftv2.ServerEnvelope_AuthFailed{AuthFailed: &ruleshiftv2.AuthFailed{Reason: "invalid auth ticket"}}})
 				return
 			}
+			g.metrics.Message("in", "auth", "accepted", -1)
 			state.identity = identity
 			state.authenticated = true
 			state.session.playerID = identity.PlayerID
@@ -200,11 +212,14 @@ func (g *Gateway) join(ctx context.Context, state *connection, request *ruleshif
 	return g.broadcastSnapshots(ctx, request.RoomId, runtime)
 }
 func (g *Gateway) apply(ctx context.Context, state *connection, request *ruleshiftv2.GameCommand) error {
+	started := time.Now()
 	if state.room == nil || request == nil || request.RoomId != state.roomID {
+		g.metrics.Command("bad_request", time.Since(started))
 		return fmt.Errorf("join the target room before sending commands")
 	}
 	command, err := module.MessageFromAny(request.Command)
 	if err != nil {
+		g.metrics.Command("bad_request", time.Since(started))
 		return err
 	}
 	members := g.members(state.roomID)
@@ -214,14 +229,18 @@ func (g *Gateway) apply(ctx context.Context, state *connection, request *ruleshi
 	}
 	deltas, err := state.room.Apply(ctx, roomcore.Command{PlayerID: state.identity.PlayerID, ExpectedRevision: request.ExpectedRevision, Payload: command}, viewers)
 	if err != nil {
+		g.metrics.Command(commandResult(err), time.Since(started))
 		return err
 	}
 	for index, delta := range deltas {
 		if index >= len(members) {
 			break
 		}
-		_ = members[index].session.Send(ctx, deltaEnvelope(delta))
+		if sendErr := members[index].session.Send(ctx, deltaEnvelope(delta)); errors.Is(sendErr, errSessionFull) {
+			g.metrics.SlowConsumer()
+		}
 	}
+	g.metrics.Command("ok", time.Since(started))
 	return nil
 }
 func (g *Gateway) snapshot(ctx context.Context, state *connection, request *ruleshiftv2.SnapshotRequest) error {
@@ -235,15 +254,16 @@ func (g *Gateway) snapshot(ctx context.Context, state *connection, request *rule
 	return state.session.Send(ctx, snapshotEnvelope(snapshot))
 }
 
-func (g *Gateway) read(conn *websocket.Conn) (*ruleshiftv2.ClientEnvelope, error) {
+func (g *Gateway) read(conn *websocket.Conn) (*ruleshiftv2.ClientEnvelope, int, error) {
 	kind, payload, err := conn.ReadMessage()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if kind != websocket.BinaryMessage {
-		return nil, fmt.Errorf("binary protobuf frame required")
+		return nil, len(payload), fmt.Errorf("binary protobuf frame required")
 	}
-	return protocol.DecodeClientEnvelope(payload)
+	value, err := protocol.DecodeClientEnvelope(payload)
+	return value, len(payload), err
 }
 func (g *Gateway) write(ctx context.Context, conn *websocket.Conn, s *session, done chan<- error) {
 	var sequence uint64
@@ -265,9 +285,11 @@ func (g *Gateway) write(ctx context.Context, conn *websocket.Conn, s *session, d
 				err = fmt.Errorf("server envelope too large")
 			}
 			if err == nil {
+				g.metrics.Message("out", serverMessageType(env), "ok", len(payload))
 				err = conn.WriteMessage(websocket.BinaryMessage, payload)
 			}
 			if err != nil {
+				g.metrics.Message("out", serverMessageType(env), "error", len(payload))
 				done <- err
 				return
 			}
@@ -316,16 +338,85 @@ func (g *Gateway) members(roomID string) []member {
 	return values
 }
 func (g *Gateway) broadcastSnapshots(ctx context.Context, roomID string, runtime *roomcore.Runtime) error {
-	for _, m := range g.members(roomID) {
+	started := time.Now()
+	members := g.members(roomID)
+	defer func() { g.metrics.Broadcast(len(members), time.Since(started)) }()
+	for _, m := range members {
 		snapshot, err := runtime.Snapshot(ctx, m.viewer)
 		if err != nil {
 			return err
 		}
-		if err = m.session.Send(ctx, snapshotEnvelope(snapshot)); err != nil && !errors.Is(err, errSessionFull) {
+		if err = m.session.Send(ctx, snapshotEnvelope(snapshot)); err != nil {
+			if errors.Is(err, errSessionFull) {
+				g.metrics.SlowConsumer()
+				continue
+			}
 			return err
 		}
 	}
 	return nil
+}
+
+// ConnectionCount returns only an aggregate count and never exposes members.
+func (g *Gateway) ConnectionCount(roomID string) int { return len(g.members(roomID)) }
+
+func commandResult(err error) string {
+	switch {
+	case errors.Is(err, roomcore.ErrRevisionMismatch):
+		return "revision_mismatch"
+	case errors.Is(err, module.ErrCommandRejected):
+		return "command_rejected"
+	case errors.Is(err, module.ErrUnavailable):
+		return "module_unavailable"
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	default:
+		return "error"
+	}
+}
+
+func clientMessageType(value *ruleshiftv2.ClientEnvelope) string {
+	if value == nil {
+		return "unknown"
+	}
+	switch value.Payload.(type) {
+	case *ruleshiftv2.ClientEnvelope_AuthRequest:
+		return "auth"
+	case *ruleshiftv2.ClientEnvelope_JoinRoom:
+		return "join"
+	case *ruleshiftv2.ClientEnvelope_GameCommand:
+		return "command"
+	case *ruleshiftv2.ClientEnvelope_SnapshotRequest:
+		return "snapshot"
+	case *ruleshiftv2.ClientEnvelope_Ping:
+		return "ping"
+	default:
+		return "unknown"
+	}
+}
+
+func serverMessageType(value *ruleshiftv2.ServerEnvelope) string {
+	if value == nil {
+		return "unknown"
+	}
+	switch value.Payload.(type) {
+	case *ruleshiftv2.ServerEnvelope_AuthOk:
+		return "auth_ok"
+	case *ruleshiftv2.ServerEnvelope_AuthFailed:
+		return "auth_failed"
+	case *ruleshiftv2.ServerEnvelope_JoinRoomOk:
+		return "join_ok"
+	case *ruleshiftv2.ServerEnvelope_StateSnapshot:
+		return "snapshot"
+	case *ruleshiftv2.ServerEnvelope_StateDelta:
+		return "delta"
+	case *ruleshiftv2.ServerEnvelope_Pong:
+		return "pong"
+	case *ruleshiftv2.ServerEnvelope_Error:
+		return "error"
+	default:
+		return "unknown"
+	}
 }
 
 func moduleRef(value module.ModuleRef) *ruleshiftv2.ModuleRef {

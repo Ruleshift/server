@@ -88,7 +88,6 @@ Endpoints:
 ```text
 GET  /healthz
 GET  /readyz
-GET  /metrics
 WS   /v2/ws
 PUT  /v2/developer/registry-credentials/{name}
 POST /v2/developer/modules
@@ -98,6 +97,20 @@ GET  /v2/developer/modules/{module}/versions/{version}/validation
 POST /v2/rooms
 GET  /v2/rooms/{room_id}
 ```
+
+Operational endpoints use a separate private listener and must not be exposed
+to the internet:
+
+```text
+GET  /metrics
+GET  /internal/v1/rooms
+GET  /internal/v1/rooms/{public_room_ref}
+```
+
+Set `RULESHIFT_OPERATIONS_ADDR` and a secret
+`RULESHIFT_PUBLIC_ROOM_REF_KEY` of at least 32 bytes. Public monitoring uses the
+separate `cmd/observability-api` service; it exposes only aggregate overview and
+payload-free room projections. See [`docs/observability.md`](docs/observability.md).
 
 Developer keys belong only in Unity Editor, CI, or a trusted backend. Player
 builds authenticate through the player protocol and cannot create rooms or

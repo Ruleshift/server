@@ -6,8 +6,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
+	"github.com/Ruleshift/server/internal/metrics"
 	"github.com/Ruleshift/server/internal/module"
 )
 
@@ -18,12 +20,16 @@ type RuntimeConfig struct {
 	Store     Store
 	Module    module.Runtime
 	Clock     func() time.Time
+	Metrics   metrics.Observer
 }
 
 type request struct {
-	ctx   context.Context
-	fn    func(context.Context) (any, error)
-	reply chan result
+	ctx        context.Context
+	operation  string
+	queuedAt   time.Time
+	queueRatio float64
+	fn         func(context.Context) (any, error)
+	reply      chan result
 }
 type result struct {
 	value any
@@ -31,12 +37,21 @@ type result struct {
 }
 
 type Runtime struct {
-	state  State
-	store  Store
-	module module.Runtime
-	clock  func() time.Time
-	input  chan request
-	done   chan struct{}
+	state   State
+	store   Store
+	module  module.Runtime
+	clock   func() time.Time
+	input   chan request
+	done    chan struct{}
+	metrics metrics.Observer
+
+	roomID    string
+	moduleID  string
+	version   string
+	status    string
+	createdAt time.Time
+	revision  atomic.Uint64
+	updatedAt atomic.Int64
 }
 
 func Create(ctx context.Context, route Route, cfg RuntimeConfig) (*Runtime, error) {
@@ -111,7 +126,14 @@ func newRuntime(state State, cfg RuntimeConfig) *Runtime {
 	if clock == nil {
 		clock = func() time.Time { return time.Now().UTC() }
 	}
-	return &Runtime{state: state, store: cfg.Store, module: cfg.Module, clock: clock, input: make(chan request, queueSize), done: make(chan struct{})}
+	observer := cfg.Metrics
+	if observer == nil {
+		observer = metrics.NopRecorder{}
+	}
+	runtime := &Runtime{state: state, store: cfg.Store, module: cfg.Module, clock: clock, input: make(chan request, queueSize), done: make(chan struct{}), metrics: observer, roomID: state.Route.RoomID, moduleID: state.Route.Module.ModuleID, version: state.Route.Module.Version, status: state.Status, createdAt: state.CreatedAt}
+	runtime.revision.Store(state.Revision)
+	runtime.updatedAt.Store(state.UpdatedAt.UnixMilli())
+	return runtime
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
@@ -122,7 +144,9 @@ func (r *Runtime) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case req := <-r.input:
+			started := r.clock()
 			value, err := req.fn(req.ctx)
+			r.metrics.RoomOperation(req.operation, metricResult(err), r.clock().Sub(started), started.Sub(req.queuedAt), req.queueRatio)
 			select {
 			case req.reply <- result{value: value, err: err}:
 			case <-req.ctx.Done():
@@ -134,11 +158,12 @@ func (r *Runtime) Run(ctx context.Context) error {
 func (r *Runtime) persistEvictionSnapshot() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_ = r.store.SaveSnapshot(ctx, Snapshot{RoomID: r.state.Route.RoomID, Revision: r.state.Revision, State: r.state.Opaque, SavedAt: r.clock()})
+	err := r.store.SaveSnapshot(ctx, Snapshot{RoomID: r.state.Route.RoomID, Revision: r.state.Revision, State: r.state.Opaque, SavedAt: r.clock()})
+	r.metrics.Snapshot("eviction", metricResult(err))
 }
 
 func (r *Runtime) State(ctx context.Context) (State, error) {
-	value, err := r.submit(ctx, func(context.Context) (any, error) { return cloneState(r.state), nil })
+	value, err := r.submit(ctx, "state", func(context.Context) (any, error) { return cloneState(r.state), nil })
 	if err != nil {
 		return State{}, err
 	}
@@ -146,7 +171,7 @@ func (r *Runtime) State(ctx context.Context) (State, error) {
 }
 
 func (r *Runtime) Join(ctx context.Context, viewer module.Viewer) (SnapshotView, *DeltaView, error) {
-	value, err := r.submit(ctx, func(callCtx context.Context) (any, error) {
+	value, err := r.submit(ctx, "join", func(callCtx context.Context) (any, error) {
 		var delta *DeltaView
 		if viewer.JoinMode == module.JoinModePlayer {
 			before := r.state
@@ -182,7 +207,7 @@ func (r *Runtime) Join(ctx context.Context, viewer module.Viewer) (SnapshotView,
 }
 
 func (r *Runtime) Leave(ctx context.Context, viewer module.Viewer) (*DeltaView, error) {
-	value, err := r.submit(ctx, func(callCtx context.Context) (any, error) {
+	value, err := r.submit(ctx, "leave", func(callCtx context.Context) (any, error) {
 		if viewer.JoinMode != module.JoinModePlayer {
 			return (*DeltaView)(nil), nil
 		}
@@ -213,7 +238,7 @@ func (r *Runtime) Leave(ctx context.Context, viewer module.Viewer) (*DeltaView, 
 }
 
 func (r *Runtime) Apply(ctx context.Context, command Command, viewers []module.Viewer) ([]DeltaView, error) {
-	value, err := r.submit(ctx, func(callCtx context.Context) (any, error) {
+	value, err := r.submit(ctx, "apply", func(callCtx context.Context) (any, error) {
 		if command.PlayerID == "" {
 			return nil, fmt.Errorf("player id must not be empty")
 		}
@@ -248,15 +273,17 @@ func (r *Runtime) Apply(ctx context.Context, command Command, viewers []module.V
 }
 
 func (r *Runtime) Snapshot(ctx context.Context, viewer module.Viewer) (SnapshotView, error) {
-	value, err := r.submit(ctx, func(callCtx context.Context) (any, error) { return r.snapshot(callCtx, viewer) })
+	value, err := r.submit(ctx, "snapshot", func(callCtx context.Context) (any, error) { return r.snapshot(callCtx, viewer) })
 	if err != nil {
 		return SnapshotView{}, err
 	}
 	return value.(SnapshotView), nil
 }
 
-func (r *Runtime) submit(ctx context.Context, fn func(context.Context) (any, error)) (any, error) {
-	req := request{ctx: ctx, fn: fn, reply: make(chan result, 1)}
+func (r *Runtime) submit(ctx context.Context, operation string, fn func(context.Context) (any, error)) (any, error) {
+	queuedAt := r.clock()
+	ratio := float64(len(r.input)) / float64(cap(r.input))
+	req := request{ctx: ctx, operation: operation, queuedAt: queuedAt, queueRatio: ratio, fn: fn, reply: make(chan result, 1)}
 	select {
 	case <-r.done:
 		return nil, ErrRuntimeClosed
@@ -289,6 +316,12 @@ func (r *Runtime) commit(ctx context.Context, before State, transition module.Tr
 		return err
 	}
 	r.state = next
+	r.revision.Store(next.Revision)
+	r.updatedAt.Store(next.UpdatedAt.UnixMilli())
+	r.metrics.Revision(string(kind))
+	if snapshot != nil {
+		r.metrics.Snapshot("interval", "ok")
+	}
 	return nil
 }
 
@@ -330,5 +363,22 @@ func replayTransition(ctx context.Context, runtime module.Runtime, state State, 
 		return runtime.Apply(ctx, op, state.Opaque, event.PlayerID, event.Input)
 	default:
 		return module.Transition{}, errors.New("unsupported replay event")
+	}
+}
+
+func metricResult(err error) string {
+	switch {
+	case err == nil:
+		return "ok"
+	case errors.Is(err, ErrRevisionMismatch):
+		return "revision_mismatch"
+	case errors.Is(err, module.ErrCommandRejected):
+		return "command_rejected"
+	case errors.Is(err, module.ErrUnavailable):
+		return "module_unavailable"
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	default:
+		return "error"
 	}
 }

@@ -65,3 +65,15 @@ cluster must enable encryption-at-rest for Secrets.
 
 All queues are bounded, room processing is sequential, and network writers never
 own authoritative room state.
+
+## Monitoring boundary
+
+The public GitHub Pages portal reads only `observability-api`. That service runs
+fixed Prometheus queries and proxies payload-free room projections from the
+gateway's private operations listener. The listener reads atomic runtime
+diagnostics and never submits work to a room queue.
+
+Prometheus, Loki, PostgreSQL, `/metrics`, and `/internal/v1/*` remain on the
+private deployment network. Public room URLs use an HMAC-derived
+`public_room_ref`; internal room IDs, state, commands, player identities, and
+secrets are not part of the monitoring contract.

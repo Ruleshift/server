@@ -1,0 +1,87 @@
+openapi: 3.1.0
+info:
+  title: Ruleshift Observability API
+  version: 1.0.0
+  description: Public read-only aggregate health and payload-free room diagnostics.
+paths:
+  /healthz:
+    get:
+      operationId: observabilityHealth
+      responses:
+        "200": {description: Process health}
+  /v1/overview:
+    get:
+      operationId: getOverview
+      responses:
+        "200":
+          description: Aggregate Ruleshift health
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Overview"}
+  /v1/rooms:
+    get:
+      operationId: listOperationalRooms
+      parameters:
+        - {name: cursor, in: query, schema: {type: string, maxLength: 64}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 25}}
+        - {name: status, in: query, schema: {type: string, maxLength: 32}}
+        - {name: module, in: query, schema: {type: string, maxLength: 64}}
+        - {name: q, in: query, schema: {type: string, maxLength: 64}}
+      responses:
+        "200":
+          description: Bounded page of active rooms
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/Room"}}
+                  next_cursor: {type: string}
+  /v1/rooms/{public_room_ref}:
+    get:
+      operationId: getOperationalRoom
+      parameters:
+        - name: public_room_ref
+          in: path
+          required: true
+          schema: {type: string, pattern: "^rm_[a-z2-7]{26}$"}
+      responses:
+        "200":
+          description: Payload-free room diagnostic
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Room"}
+        "404": {description: Room not found}
+components:
+  schemas:
+    Overview:
+      type: object
+      required: [status, reasons, generated_at, metrics, thresholds, grafana]
+      properties:
+        status: {type: string, enum: [healthy, degraded, unavailable]}
+        reasons: {type: array, items: {type: string}}
+        generated_at: {type: string, format: date-time}
+        source_timestamp: {type: string, format: date-time}
+        metrics: {type: object, additionalProperties: {type: number}}
+        thresholds: {type: object, additionalProperties: {type: number}}
+        grafana:
+          type: object
+          properties:
+            system_overview: {type: string, format: uri}
+            runtime_diagnostics: {type: string, format: uri}
+    Room:
+      type: object
+      required: [public_room_ref, status, revision, module_id, module_version, created_at, last_activity_at, connections, queue_depth, queue_capacity, queue_saturation_ratio]
+      properties:
+        public_room_ref: {type: string, pattern: "^rm_[a-z2-7]{26}$"}
+        status: {type: string}
+        revision: {type: string, pattern: "^[0-9]+$"}
+        module_id: {type: string}
+        module_version: {type: string}
+        created_at: {type: string, format: date-time}
+        last_activity_at: {type: string, format: date-time}
+        connections: {type: integer, minimum: 0}
+        queue_depth: {type: integer, minimum: 0}
+        queue_capacity: {type: integer, minimum: 1}
+        queue_saturation_ratio: {type: number, minimum: 0, maximum: 1}

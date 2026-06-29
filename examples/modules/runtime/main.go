@@ -91,6 +91,10 @@ func main() {
 }
 
 func (s *server) authorize(ctx context.Context, request any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	// Kubernetes' native gRPC probe cannot attach module authorization metadata.
+	if info.FullMethod == healthv1.Health_Check_FullMethodName {
+		return handler(ctx, request)
+	}
 	if s.token == "" {
 		return handler(ctx, request)
 	}
