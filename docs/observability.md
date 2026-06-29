@@ -60,7 +60,8 @@ Configure these GitHub Actions secrets:
 ```text
 K3S_VPS_HOST=147.45.211.122
 K3S_VPS_USER=root
-K3S_SSH_KEY=<private deploy key>
+K3S_SSH_KEY=<private deploy key, including BEGIN/END lines>
+K3S_VPS_PASSPHRASE=<private key passphrase>
 K3S_SSH_KNOWN_HOSTS=<verified ssh-keyscan -H output>
 ```
 
