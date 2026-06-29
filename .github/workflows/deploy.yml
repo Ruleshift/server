@@ -104,7 +104,11 @@ jobs:
           printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$SSH_PASSPHRASE"' > "$askpass"
           chmod 700 "$askpass"
           trap 'rm -f "$askpass"' EXIT
-          SSH_ASKPASS="$askpass" SSH_ASKPASS_REQUIRE=force setsid -w ssh-add ~/.ssh/ruleshift_deploy </dev/null
+          if ! SSH_ASKPASS="$askpass" SSH_ASKPASS_REQUIRE=force DISPLAY=:0 \
+            timeout --signal=TERM 15s setsid -w ssh-add ~/.ssh/ruleshift_deploy </dev/null; then
+            echo "Failed to unlock K3S_SSH_KEY; verify K3S_VPS_PASSPHRASE"
+            exit 1
+          fi
           rm -f "$askpass"
           trap - EXIT
 
