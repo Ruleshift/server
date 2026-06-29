@@ -1,0 +1,49 @@
+# Copy this file, replace both example hosts and TLS secret names, then apply it
+# separately. Never expose the other services in this directory.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ruleshift-observability-api-public
+  namespace: ruleshift-core
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: [monitor-api.example.com]
+      secretName: monitor-api-tls
+  rules:
+    - host: monitor-api.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ruleshift-observability-api
+                port:
+                  number: 8081
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ruleshift-grafana-public
+  namespace: ruleshift-core
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: [grafana.example.com]
+      secretName: grafana-tls
+  rules:
+    - host: grafana.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ruleshift-grafana
+                port:
+                  number: 3000

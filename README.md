@@ -110,7 +110,9 @@ GET  /internal/v1/rooms/{public_room_ref}
 Set `RULESHIFT_OPERATIONS_ADDR` and a secret
 `RULESHIFT_PUBLIC_ROOM_REF_KEY` of at least 32 bytes. Public monitoring uses the
 separate `cmd/observability-api` service; it exposes only aggregate overview and
-payload-free room projections. See [`docs/observability.md`](docs/observability.md).
+payload-free room projections. Production k3s manifests live in
+[`deploy/k3s/observability`](deploy/k3s/observability); the VPS does not need a
+Git checkout. See [`docs/observability.md`](docs/observability.md).
 
 Developer keys belong only in Unity Editor, CI, or a trusted backend. Player
 builds authenticate through the player protocol and cannot create rooms or

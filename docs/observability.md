@@ -38,20 +38,73 @@ Base32. Keep the key stable to preserve links across restarts. The public room
 contract contains revision, module version, timestamps, connection count, and
 queue usage only.
 
-## VPS stack
+## k3s deployment on the VPS
 
-Create the shared private network, configure environment variables, and start
-the stack:
+Production uses the manifests in `deploy/k3s/observability`. The VPS does not
+need a Git checkout or Docker Compose. GitHub Actions builds immutable GHCR
+images, renders Kustomize locally, sends the rendered YAML over SSH, and asks
+k3s to roll out the exact commit SHA.
+
+Create the two Kubernetes secrets once on the VPS. Neither value belongs in Git:
 
 ```sh
-docker network create ruleshift-private
-docker compose -f deploy/observability/compose.yaml up -d --build
+k3s kubectl -n ruleshift-core create secret generic ruleshift-observability-secret \
+  --from-literal=RULESHIFT_PUBLIC_ROOM_REF_KEY="$(openssl rand -hex 32)"
+
+k3s kubectl -n ruleshift-core create secret generic ruleshift-grafana-admin \
+  --from-literal=password="$(openssl rand -base64 32)"
 ```
 
-Attach the Ruleshift gateway container to `ruleshift-private` with the DNS name
-`ruleshift`. The compose file binds Grafana and `observability-api` only to
-localhost; terminate public HTTPS in the VPS reverse proxy. Prometheus and Loki
-have no host port mappings.
+Configure these GitHub Actions secrets:
+
+```text
+K3S_VPS_HOST=147.45.211.122
+K3S_VPS_USER=root
+K3S_SSH_KEY=<private deploy key>
+K3S_SSH_KNOWN_HOSTS=<verified ssh-keyscan -H output>
+```
+
+Add the repository variable `K3S_AUTO_DEPLOY=true`. The corresponding public
+key must be present in `/root/.ssh/authorized_keys`. The new
+`ghcr.io/ruleshift/server-observability` package must be public, like the
+gateway package, or the namespace must have a GHCR `imagePullSecret`.
+
+For the first release, leave `K3S_AUTO_DEPLOY` disabled, push once so GHCR
+creates the observability package, make that package public, enable the
+variable, and start the workflow again with **Run workflow**.
+
+Every push to `main` now tests the code, publishes both images, applies the
+observability resources, updates the gateway environment, and rolls out the
+gateway and API. k3s uses containerd, so there is no separate `docker pull`.
+To deploy a known image manually:
+
+```sh
+k3s kubectl -n ruleshift-core set image deployment/ruleshift-gateway \
+  gateway=ghcr.io/ruleshift/server:<commit-sha>
+k3s kubectl -n ruleshift-core set image deployment/ruleshift-observability-api \
+  observability-api=ghcr.io/ruleshift/server-observability:<commit-sha>
+k3s kubectl -n ruleshift-core rollout status deployment/ruleshift-gateway
+k3s kubectl -n ruleshift-core rollout status deployment/ruleshift-observability-api
+```
+
+Prometheus, Loki, the gateway operations listener, and the API remain
+`ClusterIP` services. PostgreSQL is unchanged. Before configuring public DNS,
+smoke-test through port forwarding:
+
+```sh
+k3s kubectl -n ruleshift-core get pods
+k3s kubectl -n ruleshift-core port-forward service/ruleshift-grafana 3000:3000
+k3s kubectl -n ruleshift-core port-forward service/ruleshift-observability-api 8081:8081
+```
+
+Public GitHub Pages access requires HTTPS ingress only for
+`ruleshift-observability-api` and Grafana. Keep Prometheus, Loki, PostgreSQL,
+`ruleshift-operations`, and the gateway metrics endpoint internal. An ingress
+template is provided at `deploy/k3s/observability/ingress.example.yaml`; replace
+its hosts and TLS secret names before applying it separately.
+
+Docker Compose in `deploy/observability/compose.yaml` is retained only for
+local development.
 
 Grafana provisions two dashboards:
 

@@ -13,7 +13,8 @@ import (
 
 func TestOverviewEvaluatesDegradedThresholds(t *testing.T) {
 	prometheus := fakePrometheus(t, map[string]float64{
-		`max(ruleshift_up)`: 1,
+		`max(ruleshift_up)`:                                   1,
+		`max(timestamp(ruleshift_up))`:                        float64(time.Now().Unix()),
 		`sum(increase(ruleshift_gateway_commands_total[5m]))`: 200,
 		`sum(rate(ruleshift_gateway_commands_total{result=~"error|module_unavailable|timeout"}[5m])) / clamp_min(sum(rate(ruleshift_gateway_commands_total[5m])), 1)`: .02,
 	})
@@ -40,6 +41,31 @@ func TestOverviewEvaluatesDegradedThresholds(t *testing.T) {
 		t.Fatal(err)
 	}
 	if value.Status != "degraded" || !contains(value.Reasons, "server_error_ratio_high") {
+		t.Fatalf("overview = %+v", value)
+	}
+}
+
+func TestOverviewUsesLastScrapeTimestamp(t *testing.T) {
+	prometheus := fakePrometheus(t, map[string]float64{
+		`max(ruleshift_up)`:            1,
+		`max(timestamp(ruleshift_up))`: float64(time.Now().Add(-45 * time.Second).Unix()),
+	})
+	defer prometheus.Close()
+	operations := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer operations.Close()
+	h, err := New(Config{PrometheusURL: prometheus.URL, OperationsURL: operations.URL, Thresholds: DefaultThresholds()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	h.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/overview", nil))
+	var value Overview
+	if err = json.Unmarshal(recorder.Body.Bytes(), &value); err != nil {
+		t.Fatal(err)
+	}
+	if value.Status != "degraded" || !contains(value.Reasons, "metrics_stale") {
 		t.Fatalf("overview = %+v", value)
 	}
 }

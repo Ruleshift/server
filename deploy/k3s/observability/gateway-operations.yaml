@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ruleshift-gateway-observability
+data:
+  RULESHIFT_OPERATIONS_ADDR: ":9091"
+  RULESHIFT_ENABLE_METRICS: "true"
+  RULESHIFT_QUEUE_DEGRADED_RATIO: "0.8"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ruleshift-operations
+  labels:
+    app: ruleshift-gateway
+    ruleshift.io/component: operations
+spec:
+  type: ClusterIP
+  selector:
+    app: ruleshift-gateway
+  ports:
+    - name: operations
+      port: 9091
+      targetPort: 9091
+      protocol: TCP

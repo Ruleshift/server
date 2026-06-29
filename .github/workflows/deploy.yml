@@ -1,21 +1,35 @@
-name: Build and publish Docker image
+name: Build, publish, and deploy
 
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: ruleshift-production
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      gateway_image: ${{ steps.images.outputs.gateway }}
+      observability_image: ${{ steps.images.outputs.observability }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
 
       - name: Run tests
         run: go test ./...
@@ -23,17 +37,78 @@ jobs:
       - name: Log in to GitHub Container Registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-      - name: Set image name
-        run: echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+      - name: Set image names
+        id: images
+        shell: bash
+        run: |
+          gateway="ghcr.io/${GITHUB_REPOSITORY,,}"
+          observability="${gateway}-observability"
+          echo "gateway=$gateway" >> "$GITHUB_OUTPUT"
+          echo "observability=$observability" >> "$GITHUB_OUTPUT"
+          echo "GATEWAY_IMAGE=$gateway" >> "$GITHUB_ENV"
+          echo "OBSERVABILITY_IMAGE=$observability" >> "$GITHUB_ENV"
 
-      - name: Build Docker image
+      - name: Build gateway image
         run: |
           docker build \
-            -t $IMAGE_NAME:latest \
-            -t $IMAGE_NAME:${{ github.sha }} \
+            --build-arg BINARY=./cmd/gateway \
+            -t "$GATEWAY_IMAGE:latest" \
+            -t "$GATEWAY_IMAGE:${{ github.sha }}" \
             .
 
-      - name: Push Docker image
+      - name: Build observability API image
         run: |
-          docker push $IMAGE_NAME:latest
-          docker push $IMAGE_NAME:${{ github.sha }}
+          docker build \
+            --build-arg BINARY=./cmd/observability-api \
+            -t "$OBSERVABILITY_IMAGE:latest" \
+            -t "$OBSERVABILITY_IMAGE:${{ github.sha }}" \
+            .
+
+      - name: Push images
+        run: |
+          docker push "$GATEWAY_IMAGE:latest"
+          docker push "$GATEWAY_IMAGE:${{ github.sha }}"
+          docker push "$OBSERVABILITY_IMAGE:latest"
+          docker push "$OBSERVABILITY_IMAGE:${{ github.sha }}"
+
+  deploy:
+    if: vars.K3S_AUTO_DEPLOY == 'true'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets.K3S_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.K3S_SSH_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+
+      - name: Render k3s manifests
+        env:
+          OBSERVABILITY_IMAGE: ${{ needs.build.outputs.observability_image }}
+        run: |
+          kubectl kustomize deploy/k3s/observability --load-restrictor=LoadRestrictionsNone > /tmp/ruleshift-observability.yaml
+          sed -i "s#image: ghcr.io/ruleshift/server-observability:latest#image: ${OBSERVABILITY_IMAGE}:${{ github.sha }}#" /tmp/ruleshift-observability.yaml
+
+      - name: Deploy to k3s
+        env:
+          VPS_HOST: ${{ secrets.K3S_VPS_HOST }}
+          VPS_USER: ${{ secrets.K3S_VPS_USER }}
+          GATEWAY_IMAGE: ${{ needs.build.outputs.gateway_image }}
+          OBSERVABILITY_IMAGE: ${{ needs.build.outputs.observability_image }}
+        run: |
+          remote="${VPS_USER}@${VPS_HOST}"
+          ssh "$remote" "k3s kubectl -n ruleshift-core get secret ruleshift-observability-secret >/dev/null && k3s kubectl -n ruleshift-core get secret ruleshift-grafana-admin >/dev/null"
+          ssh "$remote" "k3s kubectl apply -f -" < /tmp/ruleshift-observability.yaml
+          ssh "$remote" "k3s kubectl -n ruleshift-core set env deployment/ruleshift-gateway --from=configmap/ruleshift-gateway-observability --from=secret/ruleshift-observability-secret"
+          ssh "$remote" "k3s kubectl -n ruleshift-core set image deployment/ruleshift-gateway gateway=${GATEWAY_IMAGE}:${{ github.sha }}"
+          ssh "$remote" "k3s kubectl -n ruleshift-core rollout status deployment/ruleshift-gateway --timeout=180s"
+          ssh "$remote" "k3s kubectl -n ruleshift-core rollout status deployment/ruleshift-observability-api --timeout=180s"

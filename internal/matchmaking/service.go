@@ -238,7 +238,7 @@ func (s *Service) CreateTicket(ctx context.Context, req CreateTicketRequest) (Ti
 		OccurredAt: now,
 	})
 	s.cfg.Metrics.IncCounter("matchmaking_ticket_created_total")
-	s.cfg.Logger.Info("matchmaking ticket created", "ticket_id", ticket.TicketID, "player_id", ticket.PlayerID, "game_id", ticket.GameID, "build_id", ticket.BuildID)
+	s.cfg.Logger.Info("matchmaking ticket created")
 	return copyTicket(ticket), nil
 }
 
@@ -266,7 +266,7 @@ func (s *Service) CancelTicket(ctx context.Context, ticketID string, playerID st
 	}
 	s.compactQueueLocked(poolKey(ticket.GameID, ticket.BuildID))
 	s.cfg.Metrics.IncCounter("matchmaking_ticket_canceled_total")
-	s.cfg.Logger.Info("matchmaking ticket canceled", "ticket_id", ticket.TicketID, "player_id", ticket.PlayerID)
+	s.cfg.Logger.Info("matchmaking ticket canceled")
 	return copyTicket(ticket), nil
 }
 
@@ -333,7 +333,7 @@ func (s *Service) FormMatches(ctx context.Context) ([]Match, error) {
 			s.compactQueueLocked(key)
 			matches = append(matches, copyMatch(match))
 			s.cfg.Metrics.IncCounter("matchmaking_match_formed_total")
-			s.cfg.Logger.Info("match formed", "match_id", match.MatchID, "game_id", match.GameID, "build_id", match.BuildID, "player_count", len(match.PlayerIDs))
+			s.cfg.Logger.Info("match formed", "player_count", len(match.PlayerIDs))
 		}
 	}
 	return matches, nil
@@ -451,7 +451,7 @@ func (s *Service) AssignMatch(ctx context.Context, matchID string) ([]Assignment
 		return nil, err
 	}
 	s.cfg.Metrics.IncCounter("matchmaking_match_assigned_total")
-	s.cfg.Logger.Info("match assigned", "match_id", current.MatchID, "server_id", current.ServerID, "assignment_count", len(current.AssignmentIDs))
+	s.cfg.Logger.Info("match assigned", "assignment_count", len(current.AssignmentIDs))
 	return s.assignmentsForMatchLocked(current), nil
 }
 
@@ -503,7 +503,7 @@ func (s *Service) ValidateConnectToken(ctx context.Context, token string) (Assig
 		}
 	}
 	s.cfg.Metrics.IncCounter("matchmaking_connect_token_valid_total")
-	s.cfg.Logger.Info("connect token validated", "assignment_id", assignment.AssignmentID, "match_id", assignment.MatchID, "server_id", assignment.ServerID, "player_id", assignment.PlayerID)
+	s.cfg.Logger.Info("connect token validated")
 	return copyAssignment(assignment), nil
 }
 

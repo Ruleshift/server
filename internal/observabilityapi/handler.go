@@ -159,6 +159,7 @@ func (h *Handler) overview(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) buildOverview(ctx context.Context) Overview {
 	queries := map[string]string{
 		"up":            `max(ruleshift_up)`,
+		"up_timestamp":  `max(timestamp(ruleshift_up))`,
 		"rooms":         `max(ruleshift_room_runtimes)`,
 		"connections":   `sum(ruleshift_gateway_connections)`,
 		"command_rate":  `sum(rate(ruleshift_gateway_commands_total[5m]))`,
@@ -192,13 +193,15 @@ func (h *Handler) buildOverview(ctx context.Context) Overview {
 	thresholds := h.cfg.Thresholds
 	value := Overview{Status: "healthy", Reasons: []string{}, GeneratedAt: now, Thresholds: OverviewThresholds{StaleAfterSeconds: thresholds.StaleAfter.Seconds(), UnavailableAfterSeconds: thresholds.UnavailableAfter.Seconds(), ErrorRatio: thresholds.ErrorRatio, CommandP95Seconds: thresholds.CommandP95.Seconds(), QueueSaturationRatio: thresholds.QueueSaturation, SlowConsumerRatio: thresholds.SlowConsumerRate, MinCommands: thresholds.MinCommands}, Grafana: GrafanaLinks{SystemOverview: h.cfg.GrafanaSystem, RuntimeDiagnostics: h.cfg.GrafanaRuntime}}
 	up := results["up"]
-	if up.err != nil || !up.sample.Present {
+	upTimestamp := results["up_timestamp"]
+	if up.err != nil || !up.sample.Present || upTimestamp.err != nil || !upTimestamp.sample.Present {
 		value.Status = "unavailable"
 		value.Reasons = append(value.Reasons, "metrics_unavailable")
 		return value
 	}
-	value.SourceTimestamp = up.sample.Timestamp
-	age := now.Sub(up.sample.Timestamp)
+	seconds, fraction := mathModf(upTimestamp.sample.Value)
+	value.SourceTimestamp = time.Unix(int64(seconds), int64(fraction*1e9)).UTC()
+	age := now.Sub(value.SourceTimestamp)
 	if up.sample.Value < 1 || age > thresholds.UnavailableAfter {
 		value.Status = "unavailable"
 		value.Reasons = append(value.Reasons, "ruleshift_unavailable")

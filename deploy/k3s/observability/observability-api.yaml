@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ruleshift-observability-api
+  labels:
+    app: ruleshift-observability-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ruleshift-observability-api
+  template:
+    metadata:
+      labels:
+        app: ruleshift-observability-api
+    spec:
+      containers:
+        - name: observability-api
+          image: ghcr.io/ruleshift/server-observability:latest
+          imagePullPolicy: Always
+          env:
+            - {name: OBS_ADDR, value: ":8081"}
+            - {name: OBS_PROMETHEUS_URL, value: "http://ruleshift-prometheus:9090"}
+            - {name: OBS_OPERATIONS_URL, value: "http://ruleshift-operations:9091"}
+            - {name: OBS_ALLOWED_ORIGIN, value: "https://ruleshift.github.io"}
+            - {name: OBS_STALE_AFTER, value: "30s"}
+            - {name: OBS_UNAVAILABLE_AFTER, value: "60s"}
+            - {name: OBS_ERROR_RATIO_THRESHOLD, value: "0.01"}
+            - {name: OBS_COMMAND_P95_THRESHOLD, value: "250ms"}
+            - {name: OBS_QUEUE_SATURATION_THRESHOLD, value: "0.8"}
+            - {name: OBS_SLOW_CONSUMER_RATIO_THRESHOLD, value: "0.005"}
+            - {name: OBS_MIN_COMMANDS, value: "100"}
+          ports:
+            - {name: http, containerPort: 8081}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 50m, memory: 48Mi}
+            limits: {cpu: 300m, memory: 192Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ruleshift-observability-api
+spec:
+  type: ClusterIP
+  selector: {app: ruleshift-observability-api}
+  ports:
+    - {name: http, port: 8081, targetPort: http}

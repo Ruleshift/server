@@ -1,0 +1,32 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: ruleshift-core
+
+resources:
+  - gateway-operations.yaml
+  - prometheus.yaml
+  - loki.yaml
+  - alloy.yaml
+  - grafana.yaml
+  - observability-api.yaml
+
+configMapGenerator:
+  - name: ruleshift-prometheus-config
+    files:
+      - prometheus.yml=prometheus.yml
+      - rules.yml=../../observability/prometheus/rules.yml
+  - name: ruleshift-loki-config
+    files:
+      - config.yml=../../observability/loki/config.yml
+  - name: ruleshift-alloy-config
+    files:
+      - config.alloy=alloy.config
+  - name: ruleshift-grafana-provisioning
+    files:
+      - datasources.yml=grafana-datasources.yml
+      - dashboards.yml=../../observability/grafana/provisioning/dashboards/dashboards.yml
+  - name: ruleshift-grafana-dashboards
+    files:
+      - system-overview.json=../../observability/grafana/dashboards/system-overview.json
+      - runtime-diagnostics.json=../../observability/grafana/dashboards/runtime-diagnostics.json
