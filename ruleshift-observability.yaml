@@ -1,0 +1,869 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ruleshift-alloy
+  namespace: ruleshift-core
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ruleshift-alloy-pod-logs
+  namespace: ruleshift-core
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods/log
+  verbs:
+  - get
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ruleshift-alloy-pod-logs
+  namespace: ruleshift-core
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ruleshift-alloy-pod-logs
+subjects:
+- kind: ServiceAccount
+  name: ruleshift-alloy
+  namespace: ruleshift-core
+---
+apiVersion: v1
+data:
+  config.alloy: |
+    logging {
+      level = "info"
+    }
+
+    discovery.kubernetes "ruleshift_pods" {
+      role = "pod"
+      namespaces {
+        names = ["ruleshift-core"]
+      }
+    }
+
+    discovery.relabel "ruleshift_gateway" {
+      targets = discovery.kubernetes.ruleshift_pods.targets
+
+      rule {
+        source_labels = ["__meta_kubernetes_pod_label_app"]
+        regex         = "ruleshift-gateway"
+        action        = "keep"
+      }
+
+      rule {
+        source_labels = ["__meta_kubernetes_pod_container_name"]
+        target_label  = "component"
+      }
+
+      rule {
+        target_label = "service"
+        replacement  = "ruleshift"
+      }
+
+      rule {
+        target_label = "environment"
+        replacement  = "production"
+      }
+    }
+
+    loki.source.kubernetes "ruleshift_gateway" {
+      targets    = discovery.relabel.ruleshift_gateway.output
+      forward_to = [loki.process.ruleshift_gateway.receiver]
+    }
+
+    loki.process "ruleshift_gateway" {
+      stage.json {
+        expressions = {
+          level = "level",
+        }
+      }
+
+      stage.labels {
+        values = {
+          level = "level",
+        }
+      }
+
+      // Identifiers are never promoted to Loki labels.
+      stage.label_drop {
+        values = ["room_id", "public_room_ref", "player_id", "developer_id", "trace_id", "pod", "instance"]
+      }
+
+      forward_to = [loki.write.local.receiver]
+    }
+
+    loki.write "local" {
+      endpoint {
+        url = "http://ruleshift-loki:3100/loki/api/v1/push"
+      }
+    }
+kind: ConfigMap
+metadata:
+  name: ruleshift-alloy-config-9md96cc2t5
+  namespace: ruleshift-core
+---
+apiVersion: v1
+data:
+  RULESHIFT_ENABLE_METRICS: "true"
+  RULESHIFT_OPERATIONS_ADDR: :9091
+  RULESHIFT_QUEUE_DEGRADED_RATIO: "0.8"
+kind: ConfigMap
+metadata:
+  name: ruleshift-gateway-observability
+  namespace: ruleshift-core
+---
+apiVersion: v1
+data:
+  runtime-diagnostics.json: |
+    {
+      "annotations": {"list": []},
+      "editable": false,
+      "graphTooltip": 1,
+      "id": null,
+      "links": [],
+      "panels": [
+        {
+          "datasource": {"type": "prometheus", "uid": "ruleshift-prometheus"},
+          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 12, "lineInterpolation": "smooth", "lineWidth": 2, "pointSize": 4, "showPoints": "never", "spanNulls": true}, "unit": "ops"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0},
+          "id": 1,
+          "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"editorMode": "code", "expr": "sum by (operation, result) (rate(ruleshift_room_operations_total[5m]))", "legendFormat": "{{operation}} / {{result}}", "refId": "A"}],
+          "title": "Room operations",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "ruleshift-prometheus"},
+          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 12, "lineInterpolation": "smooth", "lineWidth": 2, "pointSize": 4, "showPoints": "never", "spanNulls": true}, "unit": "s"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 6, "x": 6, "y": 0},
+          "id": 2,
+          "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"editorMode": "code", "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(ruleshift_room_queue_wait_duration_seconds_bucket[5m])))", "legendFormat": "{{operation}} p95", "refId": "A"}],
+          "title": "Room queue wait",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "ruleshift-prometheus"},
+          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 4, "showPoints": "never", "spanNulls": true}, "unit": "ops"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 6, "x": 0, "y": 8},
+          "id": 3,
+          "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"editorMode": "code", "expr": "sum by (direction, type, result) (rate(ruleshift_gateway_messages_total[5m]))", "legendFormat": "{{direction}} {{type}} {{result}}", "refId": "A"}],
+          "title": "Gateway messages",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "ruleshift-prometheus"},
+          "fieldConfig": {"defaults": {"color": {"mode": "continuous-GrYlRd"}, "custom": {"drawStyle": "line", "fillOpacity": 20, "lineInterpolation": "smooth", "lineWidth": 2, "pointSize": 4, "showPoints": "never", "spanNulls": true}, "unit": "percentunit"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 6, "x": 6, "y": 8},
+          "id": 4,
+          "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+          "targets": [{"editorMode": "code", "expr": "ruleshift:slow_consumer_ratio5m", "legendFormat": "slow consumers", "refId": "A"}],
+          "title": "Slow consumer ratio",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "ruleshift-prometheus"},
+          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 12, "lineInterpolation": "smooth", "lineWidth": 2, "pointSize": 4, "showPoints": "never", "spanNulls": true}, "unit": "ops"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 6, "x": 0, "y": 16},
+          "id": 5,
+          "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"editorMode": "code", "expr": "sum by (event) (rate(ruleshift_room_revisions_total[5m]))", "legendFormat": "{{event}}", "refId": "A"}],
+          "title": "Committed revisions",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "loki", "uid": "ruleshift-loki"},
+          "gridPos": {"h": 8, "w": 6, "x": 6, "y": 16},
+          "id": 6,
+          "options": {"dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": true, "showCommonLabels": false, "showLabels": false, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true},
+          "targets": [{"datasource": {"type": "loki", "uid": "ruleshift-loki"}, "editorMode": "code", "expr": "{service=\"ruleshift\", level=~\"WARN|ERROR\"}", "queryType": "range", "refId": "A"}],
+          "title": "Warnings and errors",
+          "type": "logs"
+        }
+      ],
+      "refresh": "10s",
+      "schemaVersion": 41,
+      "tags": ["ruleshift", "public"],
+      "templating": {"list": []},
+      "time": {"from": "now-1h", "to": "now"},
+      "timezone": "browser",
+      "title": "Ruleshift Runtime Diagnostics",
+      "uid": "ruleshift-runtime",
+      "version": 1
+    }
+  system-overview.json: |
+    {
+      "annotations": {"list": []},
+      "editable": false,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "id": null,
+      "links": [],
+      "panels": [
+        {
+          "datasource": {"type": "prometheus", "uid": "ruleshift-prometheus"},
+          "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"color": "red", "text": "DOWN"}, "1": {"color": "green", "text": "UP"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+          "gridPos": {"h": 5, "w": 4, "x": 0, "y": 0},
+          "id": 1,
+          "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "targets": [{"editorMode": "code", "expr": "max(ruleshift_up)", "refId": "A"}],
+          "title": "Ruleshift",
+          "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "ruleshift-prometheus"},
+          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+          "gridPos": {"h": 5, "w": 4, "x": 4, "y": 0},
+          "id": 2,
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "targets": [{"editorMode": "code", "expr": "max(ruleshift_room_runtimes)", "refId": "A"}],
+          "title": "Active rooms",
+          "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "ruleshift-prometheus"},
+          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+          "gridPos": {"h": 5, "w": 4, "x": 8, "y": 0},
+          "id": 3,
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "targets": [{"editorMode": "code", "expr": "sum(ruleshift_gateway_connections)", "refId": "A"}],
+          "title": "Connections",
+          "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "ruleshift-prometheus"},
+          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "commands/s", "drawStyle": "line", "fillOpacity": 18, "lineInterpolation": "smooth", "lineWidth": 2, "pointSize": 4, "showPoints": "never", "spanNulls": true}, "unit": "ops"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 6, "x": 0, "y": 5},
+          "id": 4,
+          "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+          "targets": [{"editorMode": "code", "expr": "ruleshift:command_rate5m", "legendFormat": "commands", "refId": "A"}],
+          "title": "Command rate",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "ruleshift-prometheus"},
+          "fieldConfig": {"defaults": {"color": {"mode": "continuous-GrYlRd"}, "custom": {"drawStyle": "line", "fillOpacity": 20, "lineInterpolation": "smooth", "lineWidth": 2, "pointSize": 4, "showPoints": "never", "spanNulls": true}, "unit": "percentunit"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 6, "x": 6, "y": 5},
+          "id": 5,
+          "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+          "targets": [{"editorMode": "code", "expr": "ruleshift:server_error_ratio5m", "legendFormat": "server errors", "refId": "A"}],
+          "title": "Server error ratio",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "ruleshift-prometheus"},
+          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 12, "lineInterpolation": "smooth", "lineWidth": 2, "pointSize": 4, "showPoints": "never", "spanNulls": true}, "unit": "s"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 6, "x": 0, "y": 13},
+          "id": 6,
+          "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+          "targets": [{"editorMode": "code", "expr": "ruleshift:command_p95_seconds5m", "legendFormat": "p95", "refId": "A"}],
+          "title": "Command latency",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "ruleshift-prometheus"},
+          "fieldConfig": {"defaults": {"color": {"mode": "continuous-GrYlRd"}, "custom": {"drawStyle": "line", "fillOpacity": 20, "lineInterpolation": "smooth", "lineWidth": 2, "pointSize": 4, "showPoints": "never", "spanNulls": true}, "max": 1, "min": 0, "unit": "percentunit"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 6, "x": 6, "y": 13},
+          "id": 7,
+          "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+          "targets": [{"editorMode": "code", "expr": "ruleshift_room_queue_saturation_ratio", "legendFormat": "max queue", "refId": "A"}],
+          "title": "Room queue saturation",
+          "type": "timeseries"
+        }
+      ],
+      "refresh": "10s",
+      "schemaVersion": 41,
+      "tags": ["ruleshift", "public"],
+      "templating": {"list": []},
+      "time": {"from": "now-1h", "to": "now"},
+      "timezone": "browser",
+      "title": "Ruleshift System Overview",
+      "uid": "ruleshift-system",
+      "version": 1
+    }
+kind: ConfigMap
+metadata:
+  name: ruleshift-grafana-dashboards-b8cddg67b9
+  namespace: ruleshift-core
+---
+apiVersion: v1
+data:
+  dashboards.yml: |
+    apiVersion: 1
+
+    providers:
+      - name: Ruleshift
+        folder: Ruleshift
+        type: file
+        disableDeletion: true
+        allowUiUpdates: false
+        options:
+          path: /var/lib/grafana/dashboards
+  datasources.yml: |
+    apiVersion: 1
+
+    datasources:
+      - name: Prometheus
+        uid: ruleshift-prometheus
+        type: prometheus
+        access: proxy
+        url: http://ruleshift-prometheus:9090
+        isDefault: true
+        editable: false
+      - name: Loki
+        uid: ruleshift-loki
+        type: loki
+        access: proxy
+        url: http://ruleshift-loki:3100
+        editable: false
+kind: ConfigMap
+metadata:
+  name: ruleshift-grafana-provisioning-79fmghcg28
+  namespace: ruleshift-core
+---
+apiVersion: v1
+data:
+  config.yml: |
+    auth_enabled: false
+
+    server:
+      http_listen_port: 3100
+
+    common:
+      path_prefix: /loki
+      replication_factor: 1
+      ring:
+        kvstore:
+          store: inmemory
+
+    schema_config:
+      configs:
+        - from: 2024-01-01
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+
+    storage_config:
+      filesystem:
+        directory: /loki/chunks
+
+    limits_config:
+      retention_period: 168h
+      allow_structured_metadata: true
+
+    compactor:
+      working_directory: /loki/compactor
+      retention_enabled: true
+      delete_request_store: filesystem
+kind: ConfigMap
+metadata:
+  name: ruleshift-loki-config-hkc4kk8mgf
+  namespace: ruleshift-core
+---
+apiVersion: v1
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 10s
+      evaluation_interval: 10s
+
+    rule_files:
+      - /etc/prometheus/rules.yml
+
+    scrape_configs:
+      - job_name: ruleshift
+        metrics_path: /metrics
+        static_configs:
+          - targets: [ruleshift-operations:9091]
+  rules.yml: |
+    groups:
+      - name: ruleshift-overview
+        interval: 10s
+        rules:
+          - record: ruleshift:command_rate5m
+            expr: sum(rate(ruleshift_gateway_commands_total[5m]))
+          - record: ruleshift:server_error_ratio5m
+            expr: sum(rate(ruleshift_gateway_commands_total{result=~"error|module_unavailable|timeout"}[5m])) / clamp_min(sum(rate(ruleshift_gateway_commands_total[5m])), 1)
+          - record: ruleshift:command_p95_seconds5m
+            expr: histogram_quantile(0.95, sum by (le) (rate(ruleshift_gateway_command_duration_seconds_bucket[5m])))
+          - record: ruleshift:slow_consumer_ratio5m
+            expr: sum(rate(ruleshift_gateway_slow_consumers_total[5m])) / clamp_min(sum(rate(ruleshift_gateway_connections_opened_total[5m])), 1)
+kind: ConfigMap
+metadata:
+  name: ruleshift-prometheus-config-b2fdg88d75
+  namespace: ruleshift-core
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ruleshift-grafana
+  namespace: ruleshift-core
+spec:
+  ports:
+  - name: http
+    port: 3000
+    targetPort: http
+  selector:
+    app: ruleshift-grafana
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ruleshift-loki
+  namespace: ruleshift-core
+spec:
+  ports:
+  - name: http
+    port: 3100
+    targetPort: http
+  selector:
+    app: ruleshift-loki
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ruleshift-observability-api
+  namespace: ruleshift-core
+spec:
+  ports:
+  - name: http
+    port: 8081
+    targetPort: http
+  selector:
+    app: ruleshift-observability-api
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: ruleshift-gateway
+    ruleshift.io/component: operations
+  name: ruleshift-operations
+  namespace: ruleshift-core
+spec:
+  ports:
+  - name: operations
+    port: 9091
+    protocol: TCP
+    targetPort: 9091
+  selector:
+    app: ruleshift-gateway
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ruleshift-prometheus
+  namespace: ruleshift-core
+spec:
+  ports:
+  - name: http
+    port: 9090
+    targetPort: http
+  selector:
+    app: ruleshift-prometheus
+  type: ClusterIP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ruleshift-grafana-data
+  namespace: ruleshift-core
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: local-path
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ruleshift-loki-data
+  namespace: ruleshift-core
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: local-path
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ruleshift-prometheus-data
+  namespace: ruleshift-core
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: local-path
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: ruleshift-alloy
+  name: ruleshift-alloy
+  namespace: ruleshift-core
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ruleshift-alloy
+  template:
+    metadata:
+      labels:
+        app: ruleshift-alloy
+    spec:
+      containers:
+      - args:
+        - run
+        - /etc/alloy/config.alloy
+        - --storage.path=/var/lib/alloy
+        image: grafana/alloy:v1.16.1
+        imagePullPolicy: IfNotPresent
+        name: alloy
+        ports:
+        - containerPort: 12345
+          name: http
+        readinessProbe:
+          httpGet:
+            path: /-/ready
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: 300m
+            memory: 256Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
+        volumeMounts:
+        - mountPath: /etc/alloy/config.alloy
+          name: config
+          readOnly: true
+          subPath: config.alloy
+        - mountPath: /var/lib/alloy
+          name: data
+      serviceAccountName: ruleshift-alloy
+      volumes:
+      - configMap:
+          name: ruleshift-alloy-config-9md96cc2t5
+        name: config
+      - emptyDir: {}
+        name: data
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: ruleshift-grafana
+  name: ruleshift-grafana
+  namespace: ruleshift-core
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ruleshift-grafana
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: ruleshift-grafana
+    spec:
+      containers:
+      - env:
+        - name: GF_AUTH_ANONYMOUS_ENABLED
+          value: "false"
+        - name: GF_USERS_ALLOW_SIGN_UP
+          value: "false"
+        - name: GF_SECURITY_ALLOW_EMBEDDING
+          value: "false"
+        - name: GF_SECURITY_ADMIN_USER
+          value: admin
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: password
+              name: ruleshift-grafana-admin
+        image: grafana/grafana:13.0.2
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 20
+        name: grafana
+        ports:
+        - containerPort: 3000
+          name: http
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: "1"
+            memory: 768Mi
+          requests:
+            cpu: 100m
+            memory: 192Mi
+        volumeMounts:
+        - mountPath: /etc/grafana/provisioning/datasources/datasources.yml
+          name: provisioning
+          readOnly: true
+          subPath: datasources.yml
+        - mountPath: /etc/grafana/provisioning/dashboards/dashboards.yml
+          name: provisioning
+          readOnly: true
+          subPath: dashboards.yml
+        - mountPath: /var/lib/grafana/dashboards/system-overview.json
+          name: dashboards
+          readOnly: true
+          subPath: system-overview.json
+        - mountPath: /var/lib/grafana/dashboards/runtime-diagnostics.json
+          name: dashboards
+          readOnly: true
+          subPath: runtime-diagnostics.json
+        - mountPath: /var/lib/grafana
+          name: data
+      securityContext:
+        fsGroup: 472
+        fsGroupChangePolicy: OnRootMismatch
+      volumes:
+      - configMap:
+          name: ruleshift-grafana-provisioning-79fmghcg28
+        name: provisioning
+      - configMap:
+          name: ruleshift-grafana-dashboards-b8cddg67b9
+        name: dashboards
+      - name: data
+        persistentVolumeClaim:
+          claimName: ruleshift-grafana-data
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: ruleshift-loki
+  name: ruleshift-loki
+  namespace: ruleshift-core
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ruleshift-loki
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: ruleshift-loki
+    spec:
+      containers:
+      - args:
+        - -config.file=/etc/loki/config.yml
+        image: grafana/loki:3.7.2
+        imagePullPolicy: IfNotPresent
+        name: loki
+        ports:
+        - containerPort: 3100
+          name: http
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 50m
+            memory: 128Mi
+        volumeMounts:
+        - mountPath: /etc/loki/config.yml
+          name: config
+          readOnly: true
+          subPath: config.yml
+        - mountPath: /loki
+          name: data
+      securityContext:
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+      volumes:
+      - configMap:
+          name: ruleshift-loki-config-hkc4kk8mgf
+        name: config
+      - name: data
+        persistentVolumeClaim:
+          claimName: ruleshift-loki-data
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: ruleshift-observability-api
+  name: ruleshift-observability-api
+  namespace: ruleshift-core
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ruleshift-observability-api
+  template:
+    metadata:
+      labels:
+        app: ruleshift-observability-api
+    spec:
+      containers:
+      - env:
+        - name: OBS_ADDR
+          value: :8081
+        - name: OBS_PROMETHEUS_URL
+          value: http://ruleshift-prometheus:9090
+        - name: OBS_OPERATIONS_URL
+          value: http://ruleshift-operations:9091
+        - name: OBS_ALLOWED_ORIGIN
+          value: https://ruleshift.github.io
+        - name: OBS_STALE_AFTER
+          value: 30s
+        - name: OBS_UNAVAILABLE_AFTER
+          value: 60s
+        - name: OBS_ERROR_RATIO_THRESHOLD
+          value: "0.01"
+        - name: OBS_COMMAND_P95_THRESHOLD
+          value: 250ms
+        - name: OBS_QUEUE_SATURATION_THRESHOLD
+          value: "0.8"
+        - name: OBS_SLOW_CONSUMER_RATIO_THRESHOLD
+          value: "0.005"
+        - name: OBS_MIN_COMMANDS
+          value: "100"
+        image: ghcr.io/ruleshift/server-observability:latest
+        imagePullPolicy: Always
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        name: observability-api
+        ports:
+        - containerPort: 8081
+          name: http
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: 300m
+            memory: 192Mi
+          requests:
+            cpu: 50m
+            memory: 48Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: ruleshift-prometheus
+  name: ruleshift-prometheus
+  namespace: ruleshift-core
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ruleshift-prometheus
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: ruleshift-prometheus
+    spec:
+      containers:
+      - args:
+        - --config.file=/etc/prometheus/prometheus.yml
+        - --storage.tsdb.path=/prometheus
+        - --storage.tsdb.retention.time=15d
+        image: prom/prometheus:v3.12.0
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          httpGet:
+            path: /-/healthy
+            port: http
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        name: prometheus
+        ports:
+        - containerPort: 9090
+          name: http
+        readinessProbe:
+          httpGet:
+            path: /-/ready
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: "1"
+            memory: 768Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        volumeMounts:
+        - mountPath: /etc/prometheus/prometheus.yml
+          name: config
+          readOnly: true
+          subPath: prometheus.yml
+        - mountPath: /etc/prometheus/rules.yml
+          name: config
+          readOnly: true
+          subPath: rules.yml
+        - mountPath: /prometheus
+          name: data
+      securityContext:
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+      volumes:
+      - configMap:
+          name: ruleshift-prometheus-config-b2fdg88d75
+        name: config
+      - name: data
+        persistentVolumeClaim:
+          claimName: ruleshift-prometheus-data

@@ -134,7 +134,8 @@ jobs:
           ssh_options=(-i "$HOME/.ssh/ruleshift_deploy" -o IdentitiesOnly=yes -o BatchMode=yes -o PasswordAuthentication=no -o StrictHostKeyChecking=yes -o ConnectTimeout=15)
           ssh "${ssh_options[@]}" "$remote" "k3s kubectl -n ruleshift-core get secret ruleshift-observability-secret >/dev/null && k3s kubectl -n ruleshift-core get secret ruleshift-grafana-admin >/dev/null"
           ssh "${ssh_options[@]}" "$remote" "k3s kubectl apply -f -" < /tmp/ruleshift-observability.yaml
-          ssh "${ssh_options[@]}" "$remote" "k3s kubectl -n ruleshift-core set env deployment/ruleshift-gateway --from=configmap/ruleshift-gateway-observability --from=secret/ruleshift-observability-secret"
+          ssh "${ssh_options[@]}" "$remote" "k3s kubectl -n ruleshift-core set env deployment/ruleshift-gateway --from=configmap/ruleshift-gateway-observability"
+          ssh "${ssh_options[@]}" "$remote" "k3s kubectl -n ruleshift-core set env deployment/ruleshift-gateway --from=secret/ruleshift-observability-secret"
           ssh "${ssh_options[@]}" "$remote" "k3s kubectl -n ruleshift-core set image deployment/ruleshift-gateway gateway=${GATEWAY_IMAGE}:${{ github.sha }}"
           ssh "${ssh_options[@]}" "$remote" "k3s kubectl -n ruleshift-core rollout status deployment/ruleshift-gateway --timeout=180s"
           ssh "${ssh_options[@]}" "$remote" "k3s kubectl -n ruleshift-core rollout status deployment/ruleshift-observability-api --timeout=180s"
