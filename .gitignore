@@ -5,6 +5,11 @@
 
 unity-client/
 
+# GitHub Pages site build outputs.
+site/node_modules/
+site/dist/
+site/.npm-cache/
+
 # Local SDK build outputs.
 sdk/dotnet/**/bin/
 sdk/dotnet/**/obj/

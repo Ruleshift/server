@@ -9,6 +9,18 @@ The core is game-agnostic. A developer can add a fourth game from a separate
 repository by publishing a gRPC/protobuf OCI image; rebuilding Ruleshift is not
 required.
 
+## Project website
+
+The developer-facing landing page and documentation index live in [`site`](site).
+It is a static Vite build deployed to GitHub Pages by
+[`pages.yml`](.github/workflows/pages.yml).
+
+```powershell
+cd site
+npm install
+npm run dev
+```
+
 ## What the MVP demonstrates
 
 - binary protobuf WebSocket protocol v2;

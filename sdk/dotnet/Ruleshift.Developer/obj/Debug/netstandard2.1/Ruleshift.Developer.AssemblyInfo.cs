@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyDescriptionAttribute("Developer SDK for provisioning and inspecting Ruleshift game modules.")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("0.1.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("0.1.0+43554863db0b12781e53607802b7532e5539ee30")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("0.1.0+f12856f7f30e6ba5a4dba6324b0ae8bb1e02896e")]
 [assembly: System.Reflection.AssemblyProductAttribute("Ruleshift.Developer")]
 [assembly: System.Reflection.AssemblyTitleAttribute("Ruleshift.Developer")]
 [assembly: System.Reflection.AssemblyVersionAttribute("0.1.0.0")]
