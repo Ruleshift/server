@@ -78,10 +78,7 @@ function getPage() {
 
 function Brand() {
   return (
-    <span className="brand" aria-label="Ruleshift home">
-      <span className="brand-mark" aria-hidden="true"><FiRefreshCw /></span>
-      <span>RULESHIFT</span>
-    </span>
+    <img src="/rs_logo_trans.png" className="brand-logo" alt="Ruleshift" />
   );
 }
 
