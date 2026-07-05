@@ -60,7 +60,7 @@ func (s *Scheduler) EnsureTenant(ctx context.Context, developerID string) error 
 	if _, err := s.client.CoreV1().ResourceQuotas(namespace).Create(ctx, quota, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		return err
 	}
-	limits := &corev1.LimitRange{ObjectMeta: metav1.ObjectMeta{Name: "ruleshift-module-limits", Namespace: namespace}, Spec: corev1.LimitRangeSpec{Limits: []corev1.LimitRangeItem{{Type: corev1.LimitTypeContainer, Default: corev1.ResourceList{corev1.ResourceLimitsCPU: resource.MustParse("500m"), corev1.ResourceLimitsMemory: resource.MustParse("256Mi"), corev1.ResourceEphemeralStorage: resource.MustParse("64Mi")}, DefaultRequest: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("64Mi")}}}}}
+	limits := &corev1.LimitRange{ObjectMeta: metav1.ObjectMeta{Name: "ruleshift-module-limits", Namespace: namespace}, Spec: corev1.LimitRangeSpec{Limits: []corev1.LimitRangeItem{{Type: corev1.LimitTypeContainer, Default: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m"), corev1.ResourceMemory: resource.MustParse("256Mi"), corev1.ResourceEphemeralStorage: resource.MustParse("64Mi")}, DefaultRequest: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("64Mi")}}}}}
 	if _, err := s.client.CoreV1().LimitRanges(namespace).Create(ctx, limits, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		return err
 	}

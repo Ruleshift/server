@@ -7,6 +7,7 @@ import (
 
 	"github.com/Ruleshift/server/internal/controlplane"
 	"github.com/Ruleshift/server/internal/module"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -48,6 +49,23 @@ func TestDeploymentSecurityDefaults(t *testing.T) {
 	policies, err := client.NetworkingV1().NetworkPolicies(namespace).List(context.Background(), metav1.ListOptions{})
 	if err != nil || len(policies.Items) < 2 {
 		t.Fatalf("network policies=%d err=%v", len(policies.Items), err)
+	}
+	limitRange, err := client.CoreV1().LimitRanges(namespace).Get(context.Background(), "ruleshift-module-limits", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults := limitRange.Spec.Limits[0].Default
+	if _, ok := defaults[corev1.ResourceCPU]; !ok {
+		t.Fatal("container CPU default is missing")
+	}
+	if _, ok := defaults[corev1.ResourceMemory]; !ok {
+		t.Fatal("container memory default is missing")
+	}
+	if _, ok := defaults[corev1.ResourceLimitsCPU]; ok {
+		t.Fatal("LimitRange must not use ResourceQuota key limits.cpu")
+	}
+	if _, ok := defaults[corev1.ResourceLimitsMemory]; ok {
+		t.Fatal("LimitRange must not use ResourceQuota key limits.memory")
 	}
 }
 
