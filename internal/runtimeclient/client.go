@@ -3,18 +3,15 @@ package runtimeclient
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
 
-	"github.com/Ruleshift/server/internal/controlplane"
 	"github.com/Ruleshift/server/internal/module"
 	modulev1 "github.com/Ruleshift/server/internal/moduleruntime/generated/moduleruntimev1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
 )
 
 type Endpoint struct {
@@ -45,17 +42,29 @@ func (r *Resolver) Resolve(ctx context.Context, ref module.ModuleRef) (module.Ru
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", module.ErrUnavailable, err)
 	}
-	connection, err := r.connection(ctx, endpoint)
+	connection, err := r.connection(endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", module.ErrUnavailable, err)
 	}
+	return runtimeFor(connection, endpoint)
+}
+
+func runtimeFor(connection *grpc.ClientConn, endpoint Endpoint) (module.Runtime, error) {
 	commands := map[string]struct{}{}
 	for _, value := range endpoint.CommandTypeURLs {
 		commands[value] = struct{}{}
 	}
-	return module.NewGRPCClient(modulev1.NewModuleRuntimeClient(connection), module.GRPCClientConfig{StateTypeURL: endpoint.StateTypeURL, CommandTypeURLs: commands, TransitionDeadline: endpoint.TransitionDeadline})
+	return module.NewGRPCClient(
+		modulev1.NewModuleRuntimeClient(connection),
+		module.GRPCClientConfig{
+			StateTypeURL:       endpoint.StateTypeURL,
+			CommandTypeURLs:    commands,
+			TransitionDeadline: endpoint.TransitionDeadline,
+		},
+	)
 }
-func (r *Resolver) connection(ctx context.Context, endpoint Endpoint) (*grpc.ClientConn, error) {
+
+func (r *Resolver) connection(endpoint Endpoint) (*grpc.ClientConn, error) {
 	key := endpoint.Address + "\x00" + endpoint.Token
 	r.mu.Lock()
 	if existing := r.connections[key]; existing != nil {
@@ -63,24 +72,35 @@ func (r *Resolver) connection(ctx context.Context, endpoint Endpoint) (*grpc.Cli
 		return existing, nil
 	}
 	r.mu.Unlock()
-	options := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(module.MaxStateBytes+module.MaxMessageBytes), grpc.MaxCallSendMsgSize(module.MaxStateBytes+module.MaxMessageBytes))}
-	if endpoint.Token != "" {
-		options = append(options, grpc.WithPerRPCCredentials(tokenCredential{token: endpoint.Token}))
-	}
-	connection, err := grpc.NewClient(endpoint.Address, options...)
+	connection, err := newConnection(endpoint)
 	if err != nil {
 		return nil, err
 	}
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	if existing := r.connections[key]; existing != nil {
-		r.mu.Unlock()
-		connection.Close()
+		_ = connection.Close()
 		return existing, nil
 	}
 	r.connections[key] = connection
-	r.mu.Unlock()
 	return connection, nil
 }
+
+func newConnection(endpoint Endpoint) (*grpc.ClientConn, error) {
+	maxMessageBytes := module.MaxStateBytes + module.MaxMessageBytes
+	options := []grpc.DialOption{
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(maxMessageBytes),
+			grpc.MaxCallSendMsgSize(maxMessageBytes),
+		),
+	}
+	if endpoint.Token != "" {
+		options = append(options, grpc.WithPerRPCCredentials(tokenCredential{token: endpoint.Token}))
+	}
+	return grpc.NewClient(endpoint.Address, options...)
+}
+
 func (r *Resolver) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -102,31 +122,3 @@ func (c tokenCredential) GetRequestMetadata(ctx context.Context, uri ...string) 
 func (c tokenCredential) RequireTransportSecurity() bool { return false }
 
 var _ credentials.PerRPCCredentials = tokenCredential{}
-
-type Connector struct{}
-
-func (Connector) Connect(ctx context.Context, deployment controlplane.RuntimeDeployment, version controlplane.Version) (module.Runtime, controlplane.Description, error) {
-	endpoint := Endpoint{Address: deployment.Endpoint, Token: deployment.RPCToken, StateTypeURL: version.Manifest.StateTypeURL, CommandTypeURLs: version.Manifest.CommandTypeURLs, TransitionDeadline: time.Duration(version.Manifest.TransitionDeadlineMS) * time.Millisecond}
-	resolver := NewResolver(endpointSource{endpoint: endpoint})
-	runtime, err := resolver.Resolve(ctx, version.Ref)
-	if err != nil {
-		return nil, controlplane.Description{}, err
-	}
-	connection, err := resolver.connection(ctx, endpoint)
-	if err != nil {
-		return nil, controlplane.Description{}, err
-	}
-	requestCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+deployment.RPCToken)
-	response, err := modulev1.NewModuleRuntimeClient(connection).Describe(requestCtx, &modulev1.DescribeRequest{})
-	if err != nil {
-		return nil, controlplane.Description{}, err
-	}
-	description := controlplane.Description{ModuleID: response.ModuleId, Version: response.Version, ABIVersion: response.AbiVersion, StateTypeURL: response.StateTypeUrl, CommandTypeURLs: append([]string(nil), response.CommandTypeUrls...), DescriptorDigest: "sha256:" + hex.EncodeToString(response.DescriptorSetSha256), SupportsPlayerLeft: response.SupportsPlayerLeft}
-	return runtime, description, nil
-}
-
-type endpointSource struct{ endpoint Endpoint }
-
-func (s endpointSource) Endpoint(context.Context, module.ModuleRef) (Endpoint, error) {
-	return s.endpoint, nil
-}
