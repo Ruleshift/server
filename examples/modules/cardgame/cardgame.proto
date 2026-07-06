@@ -1,8 +1,0 @@
-syntax = "proto3";
-package ruleshift.examples.cardgame.v1;
-option go_package = "example.com/ruleshift-cardgame/gen;cardgamev1";
-
-message State { bytes canonical_json = 1; }
-message Command { bytes canonical_json = 1; }
-message Delta { bytes canonical_json = 1; }
-message View { bytes canonical_json = 1; }

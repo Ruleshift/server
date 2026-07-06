@@ -25,10 +25,10 @@ flowchart LR
 - `internal/controlplane`: publication, validation and activation lifecycle;
 - `internal/scheduler/kubernetes`: tenant isolation and module workloads;
 - `internal/storage/postgres`: control and module persistence;
-- `examples/modules`: independently built OCI services, never imported by core.
+- [`Ruleshift/example`](https://github.com/Ruleshift/example): independently built OCI services, never imported by core.
 
 There are no in-process game reducers in core. Hidden Number, Xiangqi and Card
-Game live under `examples/modules` and are built as independent OCI services.
+Game live in the standalone example repository and are built as independent OCI services.
 
 ## Version and room invariants
 

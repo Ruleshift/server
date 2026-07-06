@@ -24,6 +24,7 @@ import {
 } from "react-icons/si";
 
 const REPOSITORY = "https://github.com/Ruleshift/server";
+const EXAMPLES_REPOSITORY = "https://github.com/Ruleshift/example";
 
 const examples = {
   sdk: {
@@ -297,9 +298,9 @@ function CodeExample() {
         <pre className="code-body"><code>{selected.code}</code></pre>
       </div>
       <div className="example-links">
-        <a href={`${REPOSITORY}/tree/main/examples/modules/hiddennumber`} target="_blank" rel="noreferrer">HIDDEN NUMBER <FiArrowRight /></a>
-        <a href={`${REPOSITORY}/tree/main/examples/modules/xiangqi`} target="_blank" rel="noreferrer">XIANGQI <FiArrowRight /></a>
-        <a href={`${REPOSITORY}/tree/main/examples/modules/cardgame`} target="_blank" rel="noreferrer">CARD GAME <FiArrowRight /></a>
+        <a href={`${EXAMPLES_REPOSITORY}/tree/main/modules/hiddennumber`} target="_blank" rel="noreferrer">HIDDEN NUMBER <FiArrowRight /></a>
+        <a href={`${EXAMPLES_REPOSITORY}/tree/main/modules/xiangqi`} target="_blank" rel="noreferrer">XIANGQI <FiArrowRight /></a>
+        <a href={`${EXAMPLES_REPOSITORY}/tree/main/modules/cardgame`} target="_blank" rel="noreferrer">CARD GAME <FiArrowRight /></a>
       </div>
     </section>
   );
@@ -382,7 +383,7 @@ function Footer({ navigate }) {
   return (
     <footer className="site-footer">
       <div className="footer-brand"><Brand /><p>Authoritative multiplayer state for game developers.</p></div>
-      <div><p className="footer-title">PROJECT</p><button onClick={() => navigate("home")}>Overview</button><button onClick={() => navigate("docs")}>Documentation</button><a href={`${REPOSITORY}/tree/main/examples/modules`}>Examples</a></div>
+      <div><p className="footer-title">PROJECT</p><button onClick={() => navigate("home")}>Overview</button><button onClick={() => navigate("docs")}>Documentation</button><a href={EXAMPLES_REPOSITORY}>Examples</a></div>
       <div><p className="footer-title">SOURCE</p><a href={REPOSITORY}>GitHub</a><a href={`${REPOSITORY}/blob/main/go.mod`}>Go module</a><a href={`${REPOSITORY}/actions`}>Build status</a></div>
       <div className="footer-meta"><span>GO + PROTOBUF</span><span>© 2026 RULESHIFT</span></div>
     </footer>

@@ -366,12 +366,13 @@ Protocol v1 намеренно не поддерживается.
 
 Репозиторий содержит три внешних примера:
 
-- `examples/modules/xiangqi`;
-- `examples/modules/hiddennumber`;
-- `examples/modules/cardgame`.
+- [`modules/xiangqi`](https://github.com/Ruleshift/example/tree/main/modules/xiangqi);
+- [`modules/hiddennumber`](https://github.com/Ruleshift/example/tree/main/modules/hiddennumber);
+- [`modules/cardgame`](https://github.com/Ruleshift/example/tree/main/modules/cardgame).
 
 У каждого есть module proto, manifest, Dockerfile и проверенные conformance
-vectors. Общий Go host находится в `examples/modules/runtime`; production core
+vectors. Общий Go host находится в
+[`modules/runtime`](https://github.com/Ruleshift/example/tree/main/modules/runtime); production core
 его не импортирует.
 
 ## 17. Диагностика

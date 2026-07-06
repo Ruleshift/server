@@ -62,17 +62,14 @@ go test ./...
 go vet ./...
 ```
 
-The external examples and their byte-level conformance vectors are tested in
-the normal Go suite:
-
-- `examples/modules/xiangqi`
-- `examples/modules/hiddennumber`
-- `examples/modules/cardgame`
-
-Build an example from the repository root:
+External modules, development clients, and byte-level conformance vectors live
+in the standalone [Ruleshift/example](https://github.com/Ruleshift/example)
+repository. Clone it and build from its root:
 
 ```powershell
-docker build -f examples/modules/hiddennumber/Dockerfile `
+git clone https://github.com/Ruleshift/example.git
+Set-Location example
+docker build -f modules/hiddennumber/Dockerfile `
   -t localhost:5000/hiddennumber:1.0.0 .
 ```
 
@@ -150,5 +147,5 @@ Module timeout/error never changes state or revision. Malformed, oversized or
 wrong-type responses are protocol violations; three within 60 seconds degrade
 the version and prevent new rooms from using it.
 
-An architecture test ensures production core never imports code from
-`examples/modules`.
+An architecture test ensures production core never imports game module
+implementations, including the standalone example module.

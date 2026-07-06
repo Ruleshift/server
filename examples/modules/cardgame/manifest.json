@@ -1,1 +1,0 @@
-{"module_id":"cardgame","version":"1.0.0","abi_version":1,"state_type_url":"type.googleapis.com/ruleshift.examples.cardgame.v1.State","command_type_urls":["type.googleapis.com/ruleshift.examples.cardgame.v1.Command"],"transition_deadline_ms":100,"capabilities":["player_lifecycle","private_projection","public_projection","full_projection"]}

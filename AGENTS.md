@@ -59,8 +59,9 @@ The server is authoritative:
 - `internal/roomcore` owns opaque authoritative state and command ordering.
 - `internal/protocol` owns protobuf schema, framing, and validation.
 - `internal/gatewayv2` owns protobuf WebSocket transport/session plumbing.
-- Game implementations live only in external OCI images or `examples/modules`;
-  production core must never import them.
+- Game implementations live only in external OCI images, with reference
+  implementations in `github.com/Ruleshift/example`; production core must
+  never import them.
 - `cmd/gateway` wires packages together but should not contain domain logic.
 
 ## Documentation Rules

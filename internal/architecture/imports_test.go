@@ -30,7 +30,7 @@ func TestProductionCoreDoesNotImportGameImplementations(t *testing.T) {
 			}
 			for _, spec := range parsed.Imports {
 				value, _ := strconv.Unquote(spec.Path.Value)
-				if strings.Contains(value, "/internal/game") || strings.Contains(value, "/examples/modules") {
+				if strings.Contains(value, "/internal/game") || strings.HasPrefix(value, "github.com/Ruleshift/example") {
 					t.Errorf("production file %s imports module implementation %s", path, value)
 				}
 			}
