@@ -13,3 +13,4 @@ site/.npm-cache/
 # Local SDK build outputs.
 sdk/dotnet/**/bin/
 sdk/dotnet/**/obj/
+sdk/dotnet/obj/Debug/netstandard2.1
