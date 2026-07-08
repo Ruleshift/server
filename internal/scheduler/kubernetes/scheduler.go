@@ -30,13 +30,14 @@ const modulePort int32 = 50051
 type Scheduler struct {
 	client       kubernetes.Interface
 	pollInterval time.Duration
+	waitTimeout  time.Duration
 }
 
 func New(client kubernetes.Interface) (*Scheduler, error) {
 	if client == nil {
 		return nil, fmt.Errorf("Kubernetes client is required")
 	}
-	return &Scheduler{client: client, pollInterval: 250 * time.Millisecond}, nil
+	return &Scheduler{client: client, pollInterval: 250 * time.Millisecond, waitTimeout: 2 * time.Minute}, nil
 }
 
 func TenantNamespace(developerID string) string {
@@ -144,22 +145,65 @@ func (s *Scheduler) Deploy(ctx context.Context, version controlplane.Version) (c
 func (s *Scheduler) WaitReady(ctx context.Context, version controlplane.Version, _ controlplane.RuntimeDeployment) error {
 	name := WorkloadName(version)
 	namespace := TenantNamespace(version.Ref.DeveloperID)
+	waitCtx, cancel := context.WithTimeout(ctx, s.waitTimeout)
+	defer cancel()
 	ticker := time.NewTicker(s.pollInterval)
 	defer ticker.Stop()
 	for {
-		deployment, err := s.client.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+		deployment, err := s.client.AppsV1().Deployments(namespace).Get(waitCtx, name, metav1.GetOptions{})
 		if err != nil {
 			return err
 		}
-		if deployment.Status.ReadyReplicas >= 2 && deployment.Status.UpdatedReplicas >= 2 {
+		if err = deploymentReplicaFailure(deployment); err != nil {
+			return err
+		}
+		selector, err := metav1.LabelSelectorAsSelector(deployment.Spec.Selector)
+		if err != nil {
+			return fmt.Errorf("select deployment replicasets: %w", err)
+		}
+		replicaSets, err := s.client.AppsV1().ReplicaSets(namespace).List(waitCtx, metav1.ListOptions{LabelSelector: selector.String()})
+		if err != nil {
+			return fmt.Errorf("list deployment replicasets: %w", err)
+		}
+		for i := range replicaSets.Items {
+			if err = replicaSetFailure(&replicaSets.Items[i]); err != nil {
+				return err
+			}
+		}
+		desiredReplicas := int32(1)
+		if deployment.Spec.Replicas != nil {
+			desiredReplicas = *deployment.Spec.Replicas
+		}
+		if deployment.Status.ReadyReplicas >= desiredReplicas && deployment.Status.UpdatedReplicas >= desiredReplicas {
 			return nil
 		}
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-waitCtx.Done():
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("timed out after %s waiting for deployment %s/%s to become ready", s.waitTimeout, namespace, name)
 		case <-ticker.C:
 		}
 	}
+}
+
+func deploymentReplicaFailure(deployment *appsv1.Deployment) error {
+	for _, condition := range deployment.Status.Conditions {
+		if condition.Type == appsv1.DeploymentReplicaFailure && condition.Status == corev1.ConditionTrue {
+			return fmt.Errorf("deployment %s/%s replica failure (%s): %s", deployment.Namespace, deployment.Name, condition.Reason, condition.Message)
+		}
+	}
+	return nil
+}
+
+func replicaSetFailure(replicaSet *appsv1.ReplicaSet) error {
+	for _, condition := range replicaSet.Status.Conditions {
+		if condition.Type == appsv1.ReplicaSetReplicaFailure && condition.Status == corev1.ConditionTrue {
+			return fmt.Errorf("replicaset %s/%s replica failure (%s): %s", replicaSet.Namespace, replicaSet.Name, condition.Reason, condition.Message)
+		}
+	}
+	return nil
 }
 
 func (s *Scheduler) Cleanup(ctx context.Context, version controlplane.Version, pinnedRooms int) error {
@@ -201,7 +245,9 @@ func (s *Scheduler) ResolveDeployment(ctx context.Context, ref module.ModuleRef)
 }
 
 func BuildDeployment(version controlplane.Version, namespace, name string) *appsv1.Deployment {
-	replicas := int32(2)
+	// Temporarily keep one module pod per version. On the current single-node
+	// deployment a second replica consumes quota without providing node-level HA.
+	replicas := int32(1)
 	automount := false
 	runAsNonRoot := true
 	allowEscalation := false

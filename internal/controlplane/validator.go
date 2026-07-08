@@ -41,6 +41,8 @@ type Validator struct {
 	Clock      func() time.Time
 }
 
+const validationCleanupTimeout = 10 * time.Second
+
 func (v Validator) Publish(ctx context.Context, request PublishRequest) (Version, error) {
 	if err := request.Validate(); err != nil {
 		return Version{}, err
@@ -64,10 +66,20 @@ func (v Validator) Publish(ctx context.Context, request PublishRequest) (Version
 	return v.Store.GetVersion(ctx, version.Ref.DeveloperID, version.Ref.ModuleID, version.Ref.Version)
 }
 
-func (v Validator) validate(ctx context.Context, version Version, vectors []byte) error {
+func (v Validator) validate(ctx context.Context, version Version, vectors []byte) (err error) {
 	if v.Store == nil || v.Scheduler == nil || v.Connector == nil || v.Runner == nil {
 		return fmt.Errorf("validator dependencies are incomplete")
 	}
+	defer func() {
+		if err == nil {
+			return
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), validationCleanupTimeout)
+		defer cancel()
+		if cleanupErr := v.Scheduler.Cleanup(cleanupCtx, version, 0); cleanupErr != nil {
+			err = fmt.Errorf("%w; cleanup failed: %v", err, cleanupErr)
+		}
+	}()
 	now := time.Now().UTC()
 	if v.Clock != nil {
 		now = v.Clock()
@@ -81,7 +93,7 @@ func (v Validator) validate(ctx context.Context, version Version, vectors []byte
 		return fmt.Errorf("deploy immutable image: %w", err)
 	}
 	if err = v.Scheduler.WaitReady(ctx, version, deployment); err != nil {
-		return fmt.Errorf("wait for two ready replicas: %w", err)
+		return fmt.Errorf("wait for ready replicas: %w", err)
 	}
 	runtime, description, err := v.Connector.Connect(ctx, deployment, version)
 	if err != nil {

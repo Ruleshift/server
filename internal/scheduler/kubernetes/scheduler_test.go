@@ -4,9 +4,11 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Ruleshift/server/internal/controlplane"
 	"github.com/Ruleshift/server/internal/module"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -31,8 +33,8 @@ func TestDeploymentSecurityDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deployment.Spec.Replicas == nil || *deployment.Spec.Replicas != 2 {
-		t.Fatal("module must have two replicas")
+	if deployment.Spec.Replicas == nil || *deployment.Spec.Replicas != 1 {
+		t.Fatal("module must temporarily use one replica")
 	}
 	pod := deployment.Spec.Template.Spec
 	if pod.AutomountServiceAccountToken == nil || *pod.AutomountServiceAccountToken {
@@ -89,5 +91,42 @@ func TestCleanupPreservesInactiveVersionWhileRoomsArePinned(t *testing.T) {
 	}
 	if _, err := client.AppsV1().Deployments(namespace).Get(context.Background(), WorkloadName(version), metav1.GetOptions{}); err == nil {
 		t.Fatal("unpinned inactive deployment was not removed")
+	}
+	if _, err := client.CoreV1().Services(namespace).Get(context.Background(), WorkloadName(version), metav1.GetOptions{}); err == nil {
+		t.Fatal("unpinned inactive service was not removed")
+	}
+	if _, err := client.CoreV1().Secrets(namespace).Get(context.Background(), WorkloadName(version)+"-rpc", metav1.GetOptions{}); err == nil {
+		t.Fatal("unpinned inactive RPC secret was not removed")
+	}
+}
+
+func TestWaitReadyReturnsReplicaSetFailedCreateImmediately(t *testing.T) {
+	version := testVersion()
+	namespace, name := TenantNamespace(version.Ref.DeveloperID), WorkloadName(version)
+	deployment := BuildDeployment(version, namespace, name)
+	replicaSet := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name + "-abc123",
+			Namespace: namespace,
+			Labels:    deployment.Spec.Selector.MatchLabels,
+		},
+		Status: appsv1.ReplicaSetStatus{Conditions: []appsv1.ReplicaSetCondition{{
+			Type:    appsv1.ReplicaSetReplicaFailure,
+			Status:  corev1.ConditionTrue,
+			Reason:  "FailedCreate",
+			Message: "exceeded quota: ruleshift-module-quota, requested: limits.cpu=500m, used: limits.cpu=4, hard: limits.cpu=4",
+		}}},
+	}
+	client := fake.NewSimpleClientset(deployment, replicaSet)
+	scheduler, _ := New(client)
+	scheduler.pollInterval = time.Hour
+
+	started := time.Now()
+	err := scheduler.WaitReady(context.Background(), version, controlplane.RuntimeDeployment{})
+	if err == nil || !strings.Contains(err.Error(), "FailedCreate") || !strings.Contains(err.Error(), "exceeded quota") {
+		t.Fatalf("WaitReady error = %v, want original FailedCreate quota message", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("WaitReady took %s, want immediate failure", elapsed)
 	}
 }
