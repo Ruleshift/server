@@ -2,6 +2,7 @@ package kubernetes
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -10,8 +11,12 @@ import (
 	"github.com/Ruleshift/server/internal/module"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func testVersion() controlplane.Version {
@@ -128,5 +133,43 @@ func TestWaitReadyReturnsReplicaSetFailedCreateImmediately(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("WaitReady took %s, want immediate failure", elapsed)
+	}
+}
+
+func TestWaitReadyDoesNotRequireReplicaSetListWhenDeploymentIsReady(t *testing.T) {
+	version := testVersion()
+	namespace, name := TenantNamespace(version.Ref.DeveloperID), WorkloadName(version)
+	deployment := BuildDeployment(version, namespace, name)
+	deployment.Status.ReadyReplicas = *deployment.Spec.Replicas
+	deployment.Status.UpdatedReplicas = *deployment.Spec.Replicas
+	client := fake.NewSimpleClientset(deployment)
+	client.Fake.PrependReactor("list", "replicasets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "apps", Resource: "replicasets"}, "", errors.New("forbidden"))
+	})
+	scheduler, _ := New(client)
+
+	if err := scheduler.WaitReady(context.Background(), version, controlplane.RuntimeDeployment{}); err != nil {
+		t.Fatalf("WaitReady returned %v, want ready deployment without listing replicasets", err)
+	}
+}
+
+func TestWaitReadyIgnoresForbiddenReplicaSetList(t *testing.T) {
+	version := testVersion()
+	namespace, name := TenantNamespace(version.Ref.DeveloperID), WorkloadName(version)
+	deployment := BuildDeployment(version, namespace, name)
+	client := fake.NewSimpleClientset(deployment)
+	client.Fake.PrependReactor("list", "replicasets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "apps", Resource: "replicasets"}, "", errors.New("forbidden"))
+	})
+	scheduler, _ := New(client)
+	scheduler.pollInterval = time.Millisecond
+	scheduler.waitTimeout = 25 * time.Millisecond
+
+	err := scheduler.WaitReady(context.Background(), version, controlplane.RuntimeDeployment{})
+	if err == nil {
+		t.Fatal("WaitReady unexpectedly succeeded")
+	}
+	if strings.Contains(err.Error(), "forbidden") || strings.Contains(err.Error(), "replicasets") {
+		t.Fatalf("WaitReady error = %v, want timeout/deployment status instead of RBAC failure", err)
 	}
 }

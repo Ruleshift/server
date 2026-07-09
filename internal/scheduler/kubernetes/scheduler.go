@@ -157,25 +157,27 @@ func (s *Scheduler) WaitReady(ctx context.Context, version controlplane.Version,
 		if err = deploymentReplicaFailure(deployment); err != nil {
 			return err
 		}
-		selector, err := metav1.LabelSelectorAsSelector(deployment.Spec.Selector)
-		if err != nil {
-			return fmt.Errorf("select deployment replicasets: %w", err)
-		}
-		replicaSets, err := s.client.AppsV1().ReplicaSets(namespace).List(waitCtx, metav1.ListOptions{LabelSelector: selector.String()})
-		if err != nil {
-			return fmt.Errorf("list deployment replicasets: %w", err)
-		}
-		for i := range replicaSets.Items {
-			if err = replicaSetFailure(&replicaSets.Items[i]); err != nil {
-				return err
-			}
-		}
 		desiredReplicas := int32(1)
 		if deployment.Spec.Replicas != nil {
 			desiredReplicas = *deployment.Spec.Replicas
 		}
 		if deployment.Status.ReadyReplicas >= desiredReplicas && deployment.Status.UpdatedReplicas >= desiredReplicas {
 			return nil
+		}
+		selector, err := metav1.LabelSelectorAsSelector(deployment.Spec.Selector)
+		if err != nil {
+			return fmt.Errorf("select deployment replicasets: %w", err)
+		}
+		replicaSets, err := s.client.AppsV1().ReplicaSets(namespace).List(waitCtx, metav1.ListOptions{LabelSelector: selector.String()})
+		if err != nil && !apierrors.IsForbidden(err) {
+			return fmt.Errorf("list deployment replicasets: %w", err)
+		}
+		if err == nil {
+			for i := range replicaSets.Items {
+				if err = replicaSetFailure(&replicaSets.Items[i]); err != nil {
+					return err
+				}
+			}
 		}
 		select {
 		case <-waitCtx.Done():
