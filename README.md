@@ -12,12 +12,6 @@
   </p>
 
   <p>
-    <a href="https://github.com/Ruleshift/server/actions/workflows/deploy.yml">
-      <img src="https://github.com/Ruleshift/server/actions/workflows/deploy.yml/badge.svg" alt="Build status">
-    </a>
-    <a href="https://github.com/Ruleshift/server/actions/workflows/pages.yml">
-      <img src="https://github.com/Ruleshift/server/actions/workflows/pages.yml/badge.svg" alt="Pages status">
-    </a>
     <a href="go.mod">
       <img src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white" alt="Go 1.26">
     </a>
@@ -27,9 +21,9 @@
   </p>
 
   <p>
-    <a href="site/">Сайт проекта</a> ·
+    <a href="https://ruleshift.ru/">Сайт проекта</a> ·
     <a href="docs/ru/README.md">Документация на русском</a> ·
-    <a href="docs/architecture.md">English documentation</a>
+    <a href="docs/">English documentation</a>
   </p>
 </div>
 
