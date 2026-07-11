@@ -58,15 +58,16 @@ k3s kubectl -n ruleshift-core create secret generic ruleshift-grafana-admin \
 Configure these GitHub Actions secrets:
 
 ```text
-K3S_VPS_HOST=147.45.211.122
-K3S_VPS_USER=root
-K3S_SSH_KEY=<private deploy key, including BEGIN/END lines>
-K3S_VPS_PASSPHRASE=<private key passphrase>
-K3S_SSH_KNOWN_HOSTS=<verified ssh-keyscan -H output>
+SERVER_DNS_NAME=<VPS DNS name>
+SERVER_LOGIN=<VPS SSH login>
+SERVER_PASSWORD=<VPS SSH password>
 ```
 
-Add the repository variable `K3S_AUTO_DEPLOY=true`. The corresponding public
-key must be present in `/root/.ssh/authorized_keys`. The new
+Add the repository variable `K3S_AUTO_DEPLOY=true`. The VPS SSH server must
+allow password authentication for `SERVER_LOGIN`. The workflow records the
+host key with `ssh-keyscan`, authenticates non-interactively through
+`SSH_ASKPASS`, and keeps strict host-key checking enabled for subsequent SSH
+commands in the job. The new
 `ghcr.io/ruleshift/server-observability` package must be public, like the
 gateway package, or the namespace must have a GHCR `imagePullSecret`.
 
