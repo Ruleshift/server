@@ -1,154 +1,160 @@
-# Ruleshift
+<div align="center">
+  <a href="site/">
+    <img src="site/public/rs_logo_text.png" alt="Ruleshift" width="360">
+  </a>
 
-Ruleshift is a Go authoritative multiplayer state service for game developers.
-Player clients send protobuf commands; Ruleshift orders them per room, invokes a
-developer-owned stateless game module, persists the result, and broadcasts one
-coherent revision stream.
+  <h1>Authoritative multiplayer state — without drift</h1>
 
-The core is game-agnostic. A developer can add a fourth game from a separate
-repository by publishing a gRPC/protobuf OCI image; rebuilding Ruleshift is not
-required.
+  <p>
+    Go-сервис для разработчиков игр, который принимает protobuf-команды,
+    последовательно применяет их в комнате и раздаёт всем клиентам одну
+    согласованную ленту ревизий.
+  </p>
 
-## Project website
+  <p>
+    <a href="https://github.com/Ruleshift/server/actions/workflows/deploy.yml">
+      <img src="https://github.com/Ruleshift/server/actions/workflows/deploy.yml/badge.svg" alt="Build status">
+    </a>
+    <a href="https://github.com/Ruleshift/server/actions/workflows/pages.yml">
+      <img src="https://github.com/Ruleshift/server/actions/workflows/pages.yml/badge.svg" alt="Pages status">
+    </a>
+    <a href="go.mod">
+      <img src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white" alt="Go 1.26">
+    </a>
+    <a href="internal/protocol/proto/ruleshift.proto">
+      <img src="https://img.shields.io/badge/protocol-protobuf%20v2-7952B3" alt="protobuf v2">
+    </a>
+  </p>
 
-The developer-facing landing page and documentation index live in [`site`](site).
-It is a static Vite build deployed to GitHub Pages by
-[`pages.yml`](.github/workflows/pages.yml).
+  <p>
+    <a href="site/">Сайт проекта</a> ·
+    <a href="docs/ru/README.md">Документация на русском</a> ·
+    <a href="docs/architecture.md">English documentation</a>
+  </p>
+</div>
 
-```powershell
-cd site
-npm install
-npm run dev
-```
+## Зачем Ruleshift
 
-## What the MVP demonstrates
+В многопользовательской игре клиент не должен быть источником истины. Ruleshift
+выносит авторитетное состояние на сервер: клиенты отправляют намерения, сервер
+упорядочивает команды, вызывает stateless-модуль игры, сохраняет результат и
+транслирует его всем участникам комнаты.
 
-- binary protobuf WebSocket protocol v2;
-- authoritative, sequential room processing with bounded queues;
-- opaque module state and recipient-specific private/public/full projections;
-- immutable room pinning to developer/module/version/image digest;
-- snapshot plus generic event replay through the exact pinned module version;
-- Developer API for OCI publication, validation, activation and room creation;
-- PostgreSQL control DB plus isolated module databases;
-- hardened multi-tenant Kubernetes module scheduling.
+Игра подключается как внешнее gRPC/protobuf OCI-изображение. Поэтому игровой
+модуль можно разрабатывать и выпускать отдельно — ядро Ruleshift пересобирать
+не требуется.
 
 ```mermaid
 flowchart LR
-    Client["Unity / player client"] -->|"protobuf v2"| Gateway
-    Gateway --> Room["bounded sequential room"]
-    Room -->|"gRPC ABI + current state"| OCI["developer OCI module"]
-    OCI -->|"next state + projections"| Room
-    Room --> DB["events + snapshots"]
-    Backend["trusted backend / SDK"] --> API["Developer API v2"]
-    API --> K8s["validation + Kubernetes scheduler"]
+    C["Unity / player client"] -->|"protobuf v2"| G[Gateway]
+    G --> R["bounded sequential room"]
+    R -->|"gRPC ABI + current state"| M["developer OCI module"]
+    M -->|"next state + projections"| R
+    R --> S["events + snapshots"]
+    D["trusted backend / SDK"] --> A["Developer API v2"]
+    A --> K["validation + Kubernetes scheduler"]
 ```
 
-## Contracts
+## Быстрая навигация
 
-- Player schema: [`internal/protocol/proto/ruleshift.proto`](internal/protocol/proto/ruleshift.proto)
-- Module ABI: [`internal/moduleruntime/proto/module_runtime.proto`](internal/moduleruntime/proto/module_runtime.proto)
-- Module guide: [`docs/module-development.md`](docs/module-development.md)
-- Card Game v2 example: [`docs/cardgame-module.md`](docs/cardgame-module.md)
-- Architecture: [`docs/architecture.md`](docs/architecture.md)
-- Protocol details: [`docs/protocol.md`](docs/protocol.md)
+| Если вы хотите… | Начните здесь |
+| --- | --- |
+| Понять устройство системы | [Архитектура](docs/architecture.md) · [русская версия](docs/ru/architecture.md) |
+| Подключить player client | [Unity client](docs/unity-client.md) · [клиент Unity на русском](docs/ru/unity-client.md) |
+| Создать и опубликовать игровой модуль | [Module development](docs/module-development.md) · [русская версия](docs/ru/module-development.md) |
+| Разобраться с wire protocol | [Protocol v2](docs/protocol.md) · [русская версия](docs/ru/protocol.md) |
+| Управлять модулями и комнатами | [Developer API v2](docs/developer-api.md) · [русская версия](docs/ru/developer-api.md) |
+| Подключить Steam-аутентификацию | [Steam integration](docs/steam-integration.md) · [русская версия](docs/ru/steam-integration.md) |
+| Настроить production-наблюдаемость | [Observability](docs/observability.md) · [k3s deployment](deploy/k3s/observability/README.md) |
+| Посмотреть модель хранения | [Database](docs/database.md) · [русская версия](docs/ru/database.md) |
+| Изучить benchmark scope | [Performance report](docs/performance-report.md) · [русская версия](docs/ru/performance-report.md) |
 
-The production WebSocket endpoint is `/v2/ws`. Protocol v1 is intentionally a
-breaking change and is rejected.
+## Что демонстрирует MVP
 
-## Run tests
+- бинарный WebSocket-протокол на protobuf v2;
+- последовательную обработку команд в комнате с bounded queues;
+- непрозрачное состояние модуля и recipient-specific public/private/full projections;
+- immutable pinning комнаты на developer, module, version и image digest;
+- snapshots и generic event replay через точно зафиксированную версию модуля;
+- Developer API v2 для публикации OCI-модулей, валидации, активации и создания комнат;
+- PostgreSQL control DB и изолированные module databases;
+- tenant isolation и безопасное планирование модулей в Kubernetes.
+
+## Быстрый старт
+
+Требования: Go 1.26, Docker и PostgreSQL для локального запуска gateway.
 
 ```powershell
+# Запустить локальный PostgreSQL
+docker compose up -d postgres
+
+# Проверить проект
 go test ./...
 go vet ./...
+
+# Запустить gateway
+go run ./cmd/gateway
 ```
 
-The external examples and their byte-level conformance vectors are tested in
-the normal Go suite:
-
-- `examples/modules/xiangqi`
-- `examples/modules/hiddennumber`
-- `examples/modules/cardgame`
-
-Build an example from the repository root:
-
-```powershell
-docker build -f examples/modules/hiddennumber/Dockerfile `
-  -t localhost:5000/hiddennumber:1.0.0 .
-```
-
-## Run the production gateway
-
-Protocol v2 requires PostgreSQL and Kubernetes. Run `cmd/gateway` inside the
-cluster, or supply `RULESHIFT_KUBECONFIG` in a development environment that can
-resolve and reach cluster Services.
-
-Required configuration:
+Для production gateway нужны PostgreSQL и Kubernetes. Основные переменные
+окружения:
 
 ```text
 RULESHIFT_DATABASE_URL
 RULESHIFT_DATABASE_ADMIN_URL
 RULESHIFT_DEVELOPER_API_KEY
-RULESHIFT_KUBECONFIG        # optional in-cluster
+RULESHIFT_KUBECONFIG        # опционально при запуске внутри кластера
 ```
 
-```powershell
-go run ./cmd/gateway
-```
+Полный список endpoint'ов и конфигурации находится в [Developer API](docs/developer-api.md)
+и [документации по observability](docs/observability.md).
 
-Endpoints:
+## Контракты и примеры
 
-```text
-GET  /healthz
-GET  /readyz
-WS   /v2/ws
-PUT  /v2/developer/registry-credentials/{name}
-POST /v2/developer/modules
-POST /v2/developer/modules/{module}/versions
-GET  /v2/developer/modules/{module}/versions/{version}
-GET  /v2/developer/modules/{module}/versions/{version}/validation
-POST /v2/rooms
-GET  /v2/rooms/{room_id}
-```
+- [Player protocol schema](internal/protocol/proto/ruleshift.proto)
+- [Module Runtime ABI](internal/moduleruntime/proto/module_runtime.proto)
+- [OpenAPI: Developer API](api/developer.openapi.yaml)
+- [OpenAPI: Observability API](api/observability.openapi.yaml)
+- [External modules](examples/modules/README.md)
+- [Hidden Number example](examples/modules/hiddennumber)
+- [Xiangqi example](examples/modules/xiangqi)
+- [Card Game v2 example](examples/modules/cardgame)
+- [Unity Developer SDK](sdk/unity/com.ruleshift.developer/README.md)
+- [.NET Developer SDK](sdk/dotnet/Ruleshift.Developer/README.md)
 
-Operational endpoints use a separate private listener and must not be exposed
-to the internet:
+Production WebSocket endpoint: `/v2/ws`. Протокол v1 намеренно несовместим и
+отклоняется сервером.
 
-```text
-GET  /metrics
-GET  /internal/v1/rooms
-GET  /internal/v1/rooms/{public_room_ref}
-```
+## Высокопроизводительная основа
 
-Set `RULESHIFT_OPERATIONS_ADDR` and a secret
-`RULESHIFT_PUBLIC_ROOM_REF_KEY` of at least 32 bytes. Public monitoring uses the
-separate `cmd/observability-api` service; it exposes only aggregate overview and
-payload-free room projections. Production k3s manifests live in
-[`deploy/k3s/observability`](deploy/k3s/observability); the VPS does not need a
-Git checkout. See [`docs/observability.md`](docs/observability.md).
+Горячий путь построен вокруг небольшого количества предсказуемых компонентов:
+bounded queues, один последовательный room runtime, бинарная сериализация
+protobuf и отсутствие сетевых записей внутри room loop. Долгие операции используют
+`context.Context`, а ошибки игрового модуля не меняют состояние и revision.
 
-Developer keys belong only in Unity Editor, CI, or a trusted backend. Player
-builds authenticate through the player protocol and cannot create rooms or
-publish modules.
+Измерения и команды для воспроизведения находятся в [Performance report](docs/performance-report.md).
 
-## Persistence reset
+## Безопасность и отказоустойчивость
 
-This is a pre-production breaking migration. Old local room data is not
-migrated. Reset the Docker PostgreSQL volume before first v2 startup:
+Каждый tenant получает отдельный namespace, pull Secret, ResourceQuota,
+LimitRange и default-deny network policy. Module pods запускаются без root,
+с read-only filesystem, RuntimeDefault seccomp, без capabilities, service-account
+token и внешнего egress.
 
-```powershell
-docker compose down -v
-```
+Некорректный, слишком большой или несоответствующий типу ответ модуля считается
+нарушением протокола. После трёх таких нарушений за 60 секунд версия деградирует,
+и новые комнаты не смогут её использовать.
 
-## Security and failure behavior
+## Статус проекта
 
-Each tenant receives a separate namespace, pull Secrets, ResourceQuota,
-LimitRange and default-deny network policy. Module pods run as non-root with
-read-only root filesystem, RuntimeDefault seccomp, all capabilities dropped,
-no service-account token, no host mounts and no external egress.
+Уже реализовано: authoritative room runtime, protobuf v2 gateway, persistence,
+module ABI, Developer API v2, OCI module lifecycle, Kubernetes scheduling,
+observability, Unity/.NET SDK и conformance examples.
 
-Module timeout/error never changes state or revision. Malformed, oversized or
-wrong-type responses are protocol violations; three within 60 seconds degrade
-the version and prevent new rooms from using it.
+В дальнейших итерациях: расширение SDK для player-клиентов, полноценный
+Steam-поток авторизации, более глубокие load tests и расширение card-game state.
 
-An architecture test ensures production core never imports code from
-`examples/modules`.
+## Лицензия и вклад
+
+Проект находится в активной разработке. Перед изменением архитектуры сверяйтесь
+с [AGENTS.md](AGENTS.md) и соответствующим разделом [документации](docs/ru/README.md).
