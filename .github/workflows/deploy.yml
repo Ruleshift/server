@@ -83,38 +83,26 @@ jobs:
 
       - name: Configure SSH
         env:
-          SSH_KEY: ${{ secrets.K3S_SSH_KEY }}
-          SSH_PASSPHRASE: ${{ secrets.K3S_VPS_PASSPHRASE }}
-          SSH_KNOWN_HOSTS: ${{ secrets.K3S_SSH_KNOWN_HOSTS }}
+          SERVER_DNS_NAME: ${{ secrets.SERVER_DNS_NAME }}
+          SERVER_LOGIN: ${{ secrets.SERVER_LOGIN }}
+          SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
         run: |
-          test -n "$SSH_KEY" || { echo "K3S_SSH_KEY is empty"; exit 1; }
-          test -n "$SSH_PASSPHRASE" || { echo "K3S_VPS_PASSPHRASE is empty"; exit 1; }
-          test -n "$SSH_KNOWN_HOSTS" || { echo "K3S_SSH_KNOWN_HOSTS is empty"; exit 1; }
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$SSH_KEY" | sed 's/\r$//' > ~/.ssh/ruleshift_deploy
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/ruleshift_deploy ~/.ssh/known_hosts
+          set -euo pipefail
+          test -n "$SERVER_DNS_NAME" || { echo "SERVER_DNS_NAME is empty"; exit 1; }
+          test -n "$SERVER_LOGIN" || { echo "SERVER_LOGIN is empty"; exit 1; }
+          test -n "$SERVER_PASSWORD" || { echo "SERVER_PASSWORD is empty"; exit 1; }
 
-          agent_socket="$RUNNER_TEMP/ruleshift-ssh-agent.sock"
-          eval "$(ssh-agent -a "$agent_socket" -s)"
-          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
-          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+          install -m 700 -d ~/.ssh
+          ssh-keyscan -T 15 -H "$SERVER_DNS_NAME" > ~/.ssh/known_hosts
+          test -s ~/.ssh/known_hosts || { echo "Could not read the VPS SSH host key"; exit 1; }
+          chmod 600 ~/.ssh/known_hosts
 
           askpass="$RUNNER_TEMP/ruleshift-ssh-askpass"
-          printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$SSH_PASSPHRASE"' > "$askpass"
+          printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$SERVER_PASSWORD"' > "$askpass"
           chmod 700 "$askpass"
-          trap 'rm -f "$askpass"' EXIT
-          if ! SSH_ASKPASS="$askpass" SSH_ASKPASS_REQUIRE=force DISPLAY=:0 \
-            timeout --signal=TERM 15s setsid -w ssh-add ~/.ssh/ruleshift_deploy </dev/null; then
-            echo "Failed to unlock K3S_SSH_KEY; verify K3S_VPS_PASSPHRASE"
-            exit 1
-          fi
-          rm -f "$askpass"
-          trap - EXIT
-
-          ssh-add -L > ~/.ssh/ruleshift_deploy.pub
-          echo "Deploy key fingerprint:"
-          ssh-keygen -lf ~/.ssh/ruleshift_deploy.pub
+          echo "SSH_ASKPASS=$askpass" >> "$GITHUB_ENV"
+          echo "SSH_ASKPASS_REQUIRE=force" >> "$GITHUB_ENV"
+          echo "DISPLAY=:0" >> "$GITHUB_ENV"
 
       - name: Render k3s manifests
         env:
@@ -125,24 +113,43 @@ jobs:
 
       - name: Deploy to k3s
         env:
-          VPS_HOST: ${{ secrets.K3S_VPS_HOST }}
-          VPS_USER: ${{ secrets.K3S_VPS_USER }}
+          SERVER_DNS_NAME: ${{ secrets.SERVER_DNS_NAME }}
+          SERVER_LOGIN: ${{ secrets.SERVER_LOGIN }}
+          SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
           GATEWAY_IMAGE: ${{ needs.build.outputs.gateway_image }}
           OBSERVABILITY_IMAGE: ${{ needs.build.outputs.observability_image }}
         run: |
-          remote="${VPS_USER}@${VPS_HOST}"
-          ssh_options=(-i "$HOME/.ssh/ruleshift_deploy" -o IdentitiesOnly=yes -o BatchMode=yes -o PasswordAuthentication=no -o StrictHostKeyChecking=yes -o ConnectTimeout=15)
-          ssh "${ssh_options[@]}" "$remote" "k3s kubectl -n ruleshift-core get secret ruleshift-observability-secret >/dev/null && k3s kubectl -n ruleshift-core get secret ruleshift-grafana-admin >/dev/null"
-          ssh "${ssh_options[@]}" "$remote" "k3s kubectl apply -f -" < /tmp/ruleshift-observability.yaml
-          ssh "${ssh_options[@]}" "$remote" "k3s kubectl -n ruleshift-core set env deployment/ruleshift-gateway --from=configmap/ruleshift-gateway-observability"
-          ssh "${ssh_options[@]}" "$remote" "k3s kubectl -n ruleshift-core set env deployment/ruleshift-gateway --from=secret/ruleshift-observability-secret"
-          ssh "${ssh_options[@]}" "$remote" "k3s kubectl -n ruleshift-core set image deployment/ruleshift-gateway gateway=${GATEWAY_IMAGE}:${{ github.sha }}"
-          ssh "${ssh_options[@]}" "$remote" "k3s kubectl -n ruleshift-core rollout status deployment/ruleshift-gateway --timeout=180s"
-          ssh "${ssh_options[@]}" "$remote" "k3s kubectl -n ruleshift-core rollout status deployment/ruleshift-observability-api --timeout=180s"
+          set -euo pipefail
+          remote="${SERVER_LOGIN}@${SERVER_DNS_NAME}"
+          ssh_options=(
+            -o BatchMode=no
+            -o PreferredAuthentications=password,keyboard-interactive
+            -o PubkeyAuthentication=no
+            -o NumberOfPasswordPrompts=1
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+            -o ConnectTimeout=15
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=3
+          )
+          remote_ssh() {
+            setsid -w ssh "${ssh_options[@]}" "$remote" "$@"
+          }
 
-      - name: Stop SSH agent
+          echo "Connected to VPS; current cluster pods:"
+          remote_ssh "kubectl get pods -A"
+          remote_ssh "k3s kubectl -n ruleshift-core get secret ruleshift-observability-secret >/dev/null && k3s kubectl -n ruleshift-core get secret ruleshift-grafana-admin >/dev/null"
+          remote_ssh "k3s kubectl apply -f -" < /tmp/ruleshift-observability.yaml
+          remote_ssh "k3s kubectl -n ruleshift-core set env deployment/ruleshift-gateway --from=configmap/ruleshift-gateway-observability"
+          remote_ssh "k3s kubectl -n ruleshift-core set env deployment/ruleshift-gateway --from=secret/ruleshift-observability-secret"
+          remote_ssh "k3s kubectl -n ruleshift-core set image deployment/ruleshift-gateway gateway=${GATEWAY_IMAGE}:${{ github.sha }}"
+          remote_ssh "k3s kubectl -n ruleshift-core rollout status deployment/ruleshift-gateway --timeout=180s"
+          remote_ssh "k3s kubectl -n ruleshift-core rollout status deployment/ruleshift-observability-api --timeout=180s"
+
+          echo "Cluster pods after deployment:"
+          remote_ssh "kubectl get pods -A"
+
+      - name: Remove SSH password helper
         if: always()
         run: |
-          if [[ -n "${SSH_AGENT_PID:-}" ]]; then
-            ssh-agent -k
-          fi
+          rm -f "${SSH_ASKPASS:-}"
