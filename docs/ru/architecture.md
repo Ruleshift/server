@@ -9,7 +9,7 @@ flowchart LR
     Backend["Trusted backend / Developer SDK"] -->|"HTTP v2"| Control
     Gateway --> Registry["Реестр комнат"]
     Registry --> Queue["Ограниченная последовательная очередь комнаты"]
-    Queue -->|"gRPC ABI v1 + текущее состояние"| Module["Реплики закреплённого OCI-модуля"]
+    Queue -->|"gRPC ABI v1 + текущее состояние"| Module["Workload закреплённого OCI-модуля"]
     Module -->|"новое состояние + delta/view"| Queue
     Queue --> Store["БД модуля: события + snapshots"]
     Control --> ControlDB["Control DB: модули + версии + маршруты"]
@@ -46,9 +46,11 @@ Room runtime меняет состояние в памяти только пос
 ## Изоляция Kubernetes
 
 Каждый разработчик получает namespace со стабильным hash, ResourceQuota,
-LimitRange и default-deny правилами ingress/egress. Каждая validated version
-получает Deployment из двух replicas и ClusterIP Service. Pods запускаются не
-от root, с read-only root filesystem, seccomp `RuntimeDefault`, без capabilities,
+LimitRange и default-deny правилами ingress/egress. В MVP каждая validated version
+получает Deployment и ClusterIP Service без явно заданной политики количества
+реплик; Kubernetes применяет значение по умолчанию. HA-политика реплик отложена
+до этапа после MVP. Pods запускаются не от root, с read-only root filesystem,
+seccomp `RuntimeDefault`, без capabilities,
 privilege escalation, service-account token, host mounts и external egress.
 
 Registry credentials существуют только как tenant-scoped

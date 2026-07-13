@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,16 +29,27 @@ import (
 
 const modulePort int32 = 50051
 
+const maxReadinessDiagnosticBytes = 1024
+
 type Scheduler struct {
-	client       kubernetes.Interface
-	pollInterval time.Duration
+	client                        kubernetes.Interface
+	pollInterval                  time.Duration
+	unreadyGracePeriod            time.Duration
+	recoverableFailureGracePeriod time.Duration
+	now                           func() time.Time
 }
 
 func New(client kubernetes.Interface) (*Scheduler, error) {
 	if client == nil {
 		return nil, fmt.Errorf("Kubernetes client is required")
 	}
-	return &Scheduler{client: client, pollInterval: 250 * time.Millisecond}, nil
+	return &Scheduler{
+		client:                        client,
+		pollInterval:                  250 * time.Millisecond,
+		unreadyGracePeriod:            30 * time.Second,
+		recoverableFailureGracePeriod: 30 * time.Second,
+		now:                           time.Now,
+	}, nil
 }
 
 func TenantNamespace(developerID string) string {
@@ -61,8 +74,8 @@ func (s *Scheduler) EnsureTenant(ctx context.Context, developerID string) error 
 		return err
 	}
 	limits := &corev1.LimitRange{ObjectMeta: metav1.ObjectMeta{Name: "ruleshift-module-limits", Namespace: namespace}, Spec: corev1.LimitRangeSpec{Limits: []corev1.LimitRangeItem{{Type: corev1.LimitTypeContainer, Default: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m"), corev1.ResourceMemory: resource.MustParse("256Mi"), corev1.ResourceEphemeralStorage: resource.MustParse("64Mi")}, DefaultRequest: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("64Mi")}}}}}
-	if _, err := s.client.CoreV1().LimitRanges(namespace).Create(ctx, limits, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-		return err
+	if err := s.reconcileLimitRange(ctx, limits); err != nil {
+		return fmt.Errorf("reconcile tenant limit range: %w", err)
 	}
 	policy := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: "default-deny", Namespace: namespace}, Spec: networkingv1.NetworkPolicySpec{PodSelector: metav1.LabelSelector{}, PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress}}}
 	if _, err := s.client.NetworkingV1().NetworkPolicies(namespace).Create(ctx, policy, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -144,22 +157,242 @@ func (s *Scheduler) Deploy(ctx context.Context, version controlplane.Version) (c
 func (s *Scheduler) WaitReady(ctx context.Context, version controlplane.Version, _ controlplane.RuntimeDeployment) error {
 	name := WorkloadName(version)
 	namespace := TenantNamespace(version.Ref.DeveloperID)
+	lastStatus := fmt.Sprintf("deployment %s/%s has not reported status", namespace, name)
+	recoverableFailures := make(map[string]time.Time)
 	ticker := time.NewTicker(s.pollInterval)
 	defer ticker.Stop()
 	for {
 		deployment, err := s.client.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
+			if ctx.Err() != nil {
+				return readinessContextError(ctx.Err(), lastStatus)
+			}
 			return err
 		}
-		if deployment.Status.ReadyReplicas >= 2 && deployment.Status.UpdatedReplicas >= 2 {
+		lastStatus = deploymentReadinessStatus(deployment, nil, nil)
+		// MVP validates that the module workload has become callable. It does not
+		// enforce a replica-count policy; HA requirements are deferred until later.
+		if deployment.Status.ReadyReplicas > 0 && deployment.Status.UpdatedReplicas > 0 {
 			return nil
+		}
+		if err = deploymentReplicaFailure(deployment); err != nil {
+			return err
+		}
+		selector, err := metav1.LabelSelectorAsSelector(deployment.Spec.Selector)
+		if err != nil {
+			return fmt.Errorf("select deployment pods: %w", err)
+		}
+		pods, listErr := s.client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector.String()})
+		if listErr != nil {
+			lastStatus = deploymentReadinessStatus(deployment, nil, listErr)
+			if ctx.Err() != nil {
+				return readinessContextError(ctx.Err(), lastStatus)
+			}
+			if !apierrors.IsForbidden(listErr) {
+				return fmt.Errorf("list deployment pods: %w", listErr)
+			}
+		} else {
+			lastStatus = deploymentReadinessStatus(deployment, pods.Items, nil)
+			if err = s.podBlockingFailure(pods.Items, recoverableFailures); err != nil {
+				return err
+			}
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return readinessContextError(ctx.Err(), lastStatus)
 		case <-ticker.C:
 		}
 	}
+}
+
+func (s *Scheduler) reconcileLimitRange(ctx context.Context, desired *corev1.LimitRange) error {
+	limitRanges := s.client.CoreV1().LimitRanges(desired.Namespace)
+	existing, err := limitRanges.Get(ctx, desired.Name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		_, err = limitRanges.Create(ctx, desired, metav1.CreateOptions{})
+		if apierrors.IsAlreadyExists(err) {
+			return nil
+		}
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	if apiequality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
+		return nil
+	}
+	updated := existing.DeepCopy()
+	updated.Spec = desired.Spec
+	_, err = limitRanges.Update(ctx, updated, metav1.UpdateOptions{})
+	return err
+}
+
+func deploymentReplicaFailure(deployment *appsv1.Deployment) error {
+	for _, condition := range deployment.Status.Conditions {
+		if condition.Type == appsv1.DeploymentReplicaFailure && condition.Status == corev1.ConditionTrue {
+			return fmt.Errorf("deployment %s/%s replica failure (%s): %s", deployment.Namespace, deployment.Name, condition.Reason, boundedDiagnostic(condition.Message))
+		}
+	}
+	return nil
+}
+
+type recoverablePodFailure struct {
+	key string
+	err error
+}
+
+func (s *Scheduler) podBlockingFailure(pods []corev1.Pod, firstSeen map[string]time.Time) error {
+	items := append([]corev1.Pod(nil), pods...)
+	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+	now := s.now()
+	activeRecoverableFailures := make(map[string]struct{})
+	recoverableFailures := make([]recoverablePodFailure, 0)
+	for i := range items {
+		pod := &items[i]
+		if pod.DeletionTimestamp != nil {
+			continue
+		}
+		for _, condition := range pod.Status.Conditions {
+			if condition.Type == corev1.PodScheduled && condition.Status == corev1.ConditionFalse && condition.Reason == corev1.PodReasonUnschedulable {
+				recoverableFailures = append(recoverableFailures, recoverablePodFailure{
+					key: "pod/" + pod.Namespace + "/" + pod.Name + "/scheduling",
+					err: fmt.Errorf("pod %s/%s is unschedulable: %s", pod.Namespace, pod.Name, boundedDiagnostic(condition.Message)),
+				})
+			}
+		}
+		for _, status := range pod.Status.InitContainerStatuses {
+			failure, terminal := containerBlockingFailure(pod, status)
+			if terminal {
+				return failure
+			}
+			if failure != nil {
+				recoverableFailures = append(recoverableFailures, recoverablePodFailure{key: containerFailureKey(pod, status), err: failure})
+			}
+		}
+		for _, status := range pod.Status.ContainerStatuses {
+			failure, terminal := containerBlockingFailure(pod, status)
+			if terminal {
+				return failure
+			}
+			if failure != nil {
+				recoverableFailures = append(recoverableFailures, recoverablePodFailure{key: containerFailureKey(pod, status), err: failure})
+			}
+			if !status.Ready && status.State.Running != nil && s.unreadyGracePeriod > 0 {
+				startedAt := status.State.Running.StartedAt.Time
+				if startedAt.IsZero() && pod.Status.StartTime != nil {
+					startedAt = pod.Status.StartTime.Time
+				}
+				if !startedAt.IsZero() && now.Sub(startedAt) >= s.unreadyGracePeriod {
+					return fmt.Errorf("pod %s/%s container %s has been running but unready for at least %s; readiness probe has not succeeded%s", pod.Namespace, pod.Name, status.Name, s.unreadyGracePeriod, podReadyConditionDetail(pod))
+				}
+			}
+		}
+	}
+	for _, failure := range recoverableFailures {
+		activeRecoverableFailures[failure.key] = struct{}{}
+		startedAt, ok := firstSeen[failure.key]
+		if !ok {
+			if s.recoverableFailureGracePeriod <= 0 {
+				return failure.err
+			}
+			firstSeen[failure.key] = now
+			continue
+		}
+		if now.Sub(startedAt) >= s.recoverableFailureGracePeriod {
+			return fmt.Errorf("%w (persisted for at least %s)", failure.err, s.recoverableFailureGracePeriod)
+		}
+	}
+	for key := range firstSeen {
+		if _, ok := activeRecoverableFailures[key]; !ok {
+			delete(firstSeen, key)
+		}
+	}
+	return nil
+}
+
+func containerFailureKey(pod *corev1.Pod, status corev1.ContainerStatus) string {
+	return "pod/" + pod.Namespace + "/" + pod.Name + "/container/" + status.Name
+}
+
+func containerBlockingFailure(pod *corev1.Pod, status corev1.ContainerStatus) (error, bool) {
+	waiting := status.State.Waiting
+	if waiting == nil {
+		return nil, false
+	}
+	err := fmt.Errorf("pod %s/%s container %s is blocked (%s): %s", pod.Namespace, pod.Name, status.Name, waiting.Reason, boundedDiagnostic(waiting.Message))
+	switch waiting.Reason {
+	case "CreateContainerConfigError", "InvalidImageName", "ErrImageNeverPull":
+		return err, true
+	case "ErrImagePull", "ImagePullBackOff", "CreateContainerError", "RunContainerError", "CrashLoopBackOff":
+		return err, false
+	default:
+		return nil, false
+	}
+}
+
+func deploymentReadinessStatus(deployment *appsv1.Deployment, pods []corev1.Pod, podListErr error) string {
+	parts := []string{fmt.Sprintf("deployment %s/%s ready=%d updated=%d available=%d unavailable=%d", deployment.Namespace, deployment.Name, deployment.Status.ReadyReplicas, deployment.Status.UpdatedReplicas, deployment.Status.AvailableReplicas, deployment.Status.UnavailableReplicas)}
+	if podListErr != nil {
+		parts = append(parts, "pod diagnostics unavailable: "+boundedDiagnostic(podListErr.Error()))
+	} else {
+		items := append([]corev1.Pod(nil), pods...)
+		sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+		const maxPods = 4
+		for i := 0; i < len(items) && i < maxPods; i++ {
+			parts = append(parts, fmt.Sprintf("pod %s=%s%s%s", items[i].Name, items[i].Status.Phase, podContainerReadiness(&items[i]), podFalseConditionDetail(&items[i])))
+		}
+		if len(items) > maxPods {
+			parts = append(parts, fmt.Sprintf("%d more pods", len(items)-maxPods))
+		}
+	}
+	return boundedDiagnostic(strings.Join(parts, "; "))
+}
+
+func podContainerReadiness(pod *corev1.Pod) string {
+	for _, status := range pod.Status.InitContainerStatuses {
+		if status.State.Waiting != nil && status.State.Waiting.Reason != "" {
+			return "/" + status.State.Waiting.Reason
+		}
+	}
+	for _, status := range pod.Status.ContainerStatuses {
+		if status.State.Waiting != nil && status.State.Waiting.Reason != "" {
+			return "/" + status.State.Waiting.Reason
+		}
+		if status.State.Running != nil && !status.Ready {
+			return "/RunningNotReady(" + status.Name + ")"
+		}
+	}
+	return ""
+}
+
+func podReadyConditionDetail(pod *corev1.Pod) string {
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionFalse {
+			return "; pod Ready=False (" + condition.Reason + "): " + boundedDiagnostic(condition.Message)
+		}
+	}
+	return ""
+}
+
+func podFalseConditionDetail(pod *corev1.Pod) string {
+	for _, condition := range pod.Status.Conditions {
+		if condition.Status == corev1.ConditionFalse {
+			return fmt.Sprintf("/%s=False(%s: %s)", condition.Type, condition.Reason, boundedDiagnostic(condition.Message))
+		}
+	}
+	return ""
+}
+
+func readinessContextError(ctxErr error, status string) error {
+	return fmt.Errorf("%w: %s", ctxErr, boundedDiagnostic(status))
+}
+
+func boundedDiagnostic(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= maxReadinessDiagnosticBytes {
+		return value
+	}
+	return value[:maxReadinessDiagnosticBytes-3] + "..."
 }
 
 func (s *Scheduler) Cleanup(ctx context.Context, version controlplane.Version, pinnedRooms int) error {
@@ -201,7 +434,6 @@ func (s *Scheduler) ResolveDeployment(ctx context.Context, ref module.ModuleRef)
 }
 
 func BuildDeployment(version controlplane.Version, namespace, name string) *appsv1.Deployment {
-	replicas := int32(2)
 	automount := false
 	runAsNonRoot := true
 	allowEscalation := false
@@ -212,7 +444,63 @@ func BuildDeployment(version controlplane.Version, namespace, name string) *apps
 	if version.CredentialName != "" {
 		pullSecrets = append(pullSecrets, corev1.LocalObjectReference{Name: credentialSecretName(version.CredentialName)})
 	}
-	return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Labels: labels}, Spec: appsv1.DeploymentSpec{Replicas: &replicas, Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"ruleshift.io/workload": name}}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}, Spec: corev1.PodSpec{AutomountServiceAccountToken: &automount, ImagePullSecrets: pullSecrets, SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: &runAsNonRoot, RunAsUser: &runAsUser, SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}, Containers: []corev1.Container{{Name: "module", Image: version.ImageRef, ImagePullPolicy: corev1.PullIfNotPresent, Ports: []corev1.ContainerPort{{Name: "grpc", ContainerPort: modulePort}}, Env: []corev1.EnvVar{{Name: "RULESHIFT_MODULE_RPC_TOKEN", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: name + "-rpc"}, Key: "token"}}}}, Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m"), corev1.ResourceMemory: resource.MustParse("256Mi"), corev1.ResourceEphemeralStorage: resource.MustParse("64Mi")}, Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("64Mi")}}, SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: &allowEscalation, ReadOnlyRootFilesystem: &readOnly, RunAsNonRoot: &runAsNonRoot, Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}}, ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{GRPC: &corev1.GRPCAction{Port: modulePort}}, InitialDelaySeconds: 1, PeriodSeconds: 2, TimeoutSeconds: 1, FailureThreshold: 3}}}}}}}
+	// Replicas is intentionally unset for the MVP, so Kubernetes applies its
+	// default. TODO(post-MVP): define and enforce an explicit HA replica policy.
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Labels: labels},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"ruleshift.io/workload": name}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				Spec: corev1.PodSpec{
+					AutomountServiceAccountToken: &automount,
+					ImagePullSecrets:             pullSecrets,
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsNonRoot:   &runAsNonRoot,
+						RunAsUser:      &runAsUser,
+						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+					},
+					Containers: []corev1.Container{{
+						Name:            "module",
+						Image:           version.ImageRef,
+						ImagePullPolicy: corev1.PullIfNotPresent,
+						Ports:           []corev1.ContainerPort{{Name: "grpc", ContainerPort: modulePort}},
+						Env: []corev1.EnvVar{{
+							Name: "RULESHIFT_MODULE_RPC_TOKEN",
+							ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+								LocalObjectReference: corev1.LocalObjectReference{Name: name + "-rpc"},
+								Key:                  "token",
+							}},
+						}},
+						Resources: corev1.ResourceRequirements{
+							Limits: corev1.ResourceList{
+								corev1.ResourceCPU:              resource.MustParse("500m"),
+								corev1.ResourceMemory:           resource.MustParse("256Mi"),
+								corev1.ResourceEphemeralStorage: resource.MustParse("64Mi"),
+							},
+							Requests: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("100m"),
+								corev1.ResourceMemory: resource.MustParse("64Mi"),
+							},
+						},
+						SecurityContext: &corev1.SecurityContext{
+							AllowPrivilegeEscalation: &allowEscalation,
+							ReadOnlyRootFilesystem:   &readOnly,
+							RunAsNonRoot:             &runAsNonRoot,
+							Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+						},
+						ReadinessProbe: &corev1.Probe{
+							ProbeHandler:        corev1.ProbeHandler{GRPC: &corev1.GRPCAction{Port: modulePort}},
+							InitialDelaySeconds: 1,
+							PeriodSeconds:       2,
+							TimeoutSeconds:      1,
+							FailureThreshold:    3,
+						},
+					}},
+				},
+			},
+		},
+	}
 }
 
 func BuildService(namespace, name string) *corev1.Service {

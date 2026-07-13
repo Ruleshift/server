@@ -184,7 +184,8 @@ return &modulev1.DescribeResponse{
 ```
 
 Также зарегистрируйте стандартный gRPC health service. Readiness наступает только
-после готовности обеих replicas и успешного `Describe`.
+после готовности workload и успешного `Describe`; количество реплик в MVP не
+проверяется.
 
 ## 8. Создайте manifest
 
@@ -377,8 +378,15 @@ vectors. Общий Go host находится в `examples/modules/runtime`; pr
 ## 17. Диагностика
 
 - `validation_failed: Describe ...` — manifest и код контейнера расходятся;
+- `ErrImagePull` / `ImagePullBackOff` — кластер не может скачать OCI image. Для
+  private registry передайте `registry_credential`; `-PublicImage` используйте
+  только после того, как package действительно переведён в public visibility;
+- `context canceled` после клиентского timeout означает, что HTTP-клиент прервал
+  ожидание readiness; проверяйте указанный рядом Kubernetes pod/deployment reason;
+- gRPC health со статусом `UNKNOWN` — health service зарегистрирован без единого
+  health check; добавьте хотя бы локальный self-check, возвращающий `SERVING`;
 - `module is nondeterministic` — используете wall clock, random или map iteration;
-- `module_unavailable` — обе replicas не готовы или RPC превысил deadline;
+- `module_unavailable` — workload не готов или RPC превысил deadline;
 - `command_rejected` — модуль отклонил пользовательскую команду;
 - `wrong state type` — возвращён не объявленный `state_type_url`;
 - `payload ... maximum` — превышен лимит state/command/delta/view;

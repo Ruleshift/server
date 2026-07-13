@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/Ruleshift/server/internal/module"
 )
+
+const failedValidationCleanupTimeout = 10 * time.Second
 
 type Description struct {
 	ModuleID           string
@@ -55,6 +58,7 @@ func (v Validator) Publish(ctx context.Context, request PublishRequest) (Version
 	if err = v.validate(ctx, version, request.Vectors); err != nil {
 		_ = v.Store.MarkStatus(context.Background(), version.Ref.DeveloperID, version.Ref.ModuleID, version.Ref.Version, StatusFailed)
 		v.finishValidation(context.Background(), version, StatusFailed, err.Error())
+		v.cleanupFailedValidation(ctx, version)
 		return Version{}, err
 	}
 	if err = v.Store.Activate(ctx, version.Ref.DeveloperID, version.Ref.ModuleID, version.Ref.Version); err != nil {
@@ -62,6 +66,18 @@ func (v Validator) Publish(ctx context.Context, request PublishRequest) (Version
 	}
 	v.finishValidation(ctx, version, StatusActive, "validation passed; version activated")
 	return v.Store.GetVersion(ctx, version.Ref.DeveloperID, version.Ref.ModuleID, version.Ref.Version)
+}
+
+func (v Validator) cleanupFailedValidation(ctx context.Context, version Version) {
+	if v.Scheduler == nil {
+		return
+	}
+	version.Status = StatusFailed
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), failedValidationCleanupTimeout)
+	defer cancel()
+	if err := v.Scheduler.Cleanup(cleanupCtx, version, 0); err != nil {
+		slog.Warn("cleanup failed validation resources", "developer_id", version.Ref.DeveloperID, "module_id", version.Ref.ModuleID, "version", version.Ref.Version, "error", err)
+	}
 }
 
 func (v Validator) validate(ctx context.Context, version Version, vectors []byte) error {
@@ -81,7 +97,7 @@ func (v Validator) validate(ctx context.Context, version Version, vectors []byte
 		return fmt.Errorf("deploy immutable image: %w", err)
 	}
 	if err = v.Scheduler.WaitReady(ctx, version, deployment); err != nil {
-		return fmt.Errorf("wait for two ready replicas: %w", err)
+		return fmt.Errorf("wait for module readiness: %w", err)
 	}
 	runtime, description, err := v.Connector.Connect(ctx, deployment, version)
 	if err != nil {

@@ -9,7 +9,7 @@ flowchart LR
     Backend["Trusted backend / Developer SDK"] -->|"HTTP v2"| Control
     Gateway --> Registry["Room registry"]
     Registry --> Queue["Bounded sequential room queue"]
-    Queue -->|"gRPC ABI v1 + current state"| Module["Pinned OCI module replicas"]
+    Queue -->|"gRPC ABI v1 + current state"| Module["Pinned OCI module workload"]
     Module -->|"next state + delta/view"| Queue
     Queue --> Store["Module DB: events + snapshots"]
     Control --> ControlDB["Control DB: modules + versions + routes"]
@@ -46,9 +46,11 @@ the persistence boundary).
 ## Kubernetes isolation
 
 Each developer receives a stable hashed namespace with ResourceQuota,
-LimitRange and default-deny ingress/egress. Each validated version receives a
-two-replica Deployment and ClusterIP Service. Pods run non-root with read-only
-root filesystem, RuntimeDefault seccomp, no capabilities, no privilege
+LimitRange and default-deny ingress/egress. For the MVP, each validated version
+receives a Deployment and ClusterIP Service without an explicit replica-count
+policy; Kubernetes applies its default. An HA replica policy is deferred until
+after the MVP. Pods run non-root with read-only root filesystem,
+RuntimeDefault seccomp, no capabilities, no privilege
 escalation, no service-account token, no host mounts and no external egress.
 
 Registry credentials exist only as tenant `dockerconfigjson` Secrets. The
