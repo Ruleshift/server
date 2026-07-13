@@ -17,6 +17,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       gateway_image: ${{ steps.images.outputs.gateway }}
       observability_image: ${{ steps.images.outputs.observability }}
@@ -71,16 +72,13 @@ jobs:
           docker push "$OBSERVABILITY_IMAGE:latest"
           docker push "$OBSERVABILITY_IMAGE:${{ github.sha }}"
 
-  deploy:
-    if: vars.K3S_AUTO_DEPLOY == 'true'
+  gateway-update:
+    if: ${{ needs.build.result == 'success' && vars.K3S_AUTO_DEPLOY == 'true' }}
     needs: build
     runs-on: ubuntu-latest
     environment: production
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
       - name: Configure SSH
         env:
           SERVER_DNS_NAME: ${{ secrets.SERVER_DNS_NAME }}
@@ -104,20 +102,11 @@ jobs:
           echo "SSH_ASKPASS_REQUIRE=force" >> "$GITHUB_ENV"
           echo "DISPLAY=:0" >> "$GITHUB_ENV"
 
-      - name: Render k3s manifests
-        env:
-          OBSERVABILITY_IMAGE: ${{ needs.build.outputs.observability_image }}
-        run: |
-          kubectl kustomize deploy/k3s/observability --load-restrictor=LoadRestrictionsNone > /tmp/ruleshift-observability.yaml
-          sed -i "s#image: ghcr.io/ruleshift/server-observability:latest#image: ${OBSERVABILITY_IMAGE}:${{ github.sha }}#" /tmp/ruleshift-observability.yaml
-
-      - name: Deploy to k3s
+      - name: Run gateway updater
         env:
           SERVER_DNS_NAME: ${{ secrets.SERVER_DNS_NAME }}
           SERVER_LOGIN: ${{ secrets.SERVER_LOGIN }}
           SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
-          GATEWAY_IMAGE: ${{ needs.build.outputs.gateway_image }}
-          OBSERVABILITY_IMAGE: ${{ needs.build.outputs.observability_image }}
         run: |
           set -euo pipefail
           remote="${SERVER_LOGIN}@${SERVER_DNS_NAME}"
@@ -132,22 +121,9 @@ jobs:
             -o ServerAliveInterval=15
             -o ServerAliveCountMax=3
           )
-          remote_ssh() {
-            setsid -w ssh "${ssh_options[@]}" "$remote" "$@"
-          }
-
-          echo "Connected to VPS; current cluster pods:"
-          remote_ssh "kubectl get pods -A"
-          remote_ssh "k3s kubectl -n ruleshift-core get secret ruleshift-observability-secret >/dev/null && k3s kubectl -n ruleshift-core get secret ruleshift-grafana-admin >/dev/null"
-          remote_ssh "k3s kubectl apply -f -" < /tmp/ruleshift-observability.yaml
-          remote_ssh "k3s kubectl -n ruleshift-core set env deployment/ruleshift-gateway --from=configmap/ruleshift-gateway-observability"
-          remote_ssh "k3s kubectl -n ruleshift-core set env deployment/ruleshift-gateway --from=secret/ruleshift-observability-secret"
-          remote_ssh "k3s kubectl -n ruleshift-core set image deployment/ruleshift-gateway gateway=${GATEWAY_IMAGE}:${{ github.sha }}"
-          remote_ssh "k3s kubectl -n ruleshift-core rollout status deployment/ruleshift-gateway --timeout=180s"
-          remote_ssh "k3s kubectl -n ruleshift-core rollout status deployment/ruleshift-observability-api --timeout=180s"
-
-          echo "Cluster pods after deployment:"
-          remote_ssh "kubectl get pods -A"
+          timeout --signal=TERM --kill-after=30s 600s \
+            setsid -w ssh "${ssh_options[@]}" "$remote" \
+            "ruleshift-update-gateway ghcr.io/ruleshift/server:${{ github.sha }}"
 
       - name: Remove SSH password helper
         if: always()

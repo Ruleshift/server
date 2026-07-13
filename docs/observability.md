@@ -75,19 +75,17 @@ For the first release, leave `K3S_AUTO_DEPLOY` disabled, push once so GHCR
 creates the observability package, make that package public, enable the
 variable, and start the workflow again with **Run workflow**.
 
-Every push to `main` now tests the code, publishes both images, applies the
-observability resources, updates the gateway environment, and rolls out the
-gateway and API. k3s uses containerd, so there is no separate `docker pull`.
-To deploy a known image manually:
+Every push to `main` tests the code and publishes both images. When the build
+and image push succeed, the `gateway-update` job invokes exactly one remote
+deployment command with the immutable 40-character `${{ github.sha }}` tag:
 
 ```sh
-k3s kubectl -n ruleshift-core set image deployment/ruleshift-gateway \
-  gateway=ghcr.io/ruleshift/server:<commit-sha>
-k3s kubectl -n ruleshift-core set image deployment/ruleshift-observability-api \
-  observability-api=ghcr.io/ruleshift/server-observability:<commit-sha>
-k3s kubectl -n ruleshift-core rollout status deployment/ruleshift-gateway
-k3s kubectl -n ruleshift-core rollout status deployment/ruleshift-observability-api
+ruleshift-update-gateway ghcr.io/ruleshift/server:<40-character-commit-sha>
 ```
+
+The SSH command is limited to 600 seconds. The updater performs the gateway
+rollout, health checks, and rollback itself. The workflow no longer applies
+observability manifests or updates the observability API during this job.
 
 Prometheus, Loki, the gateway operations listener, and the API remain
 `ClusterIP` services. PostgreSQL is unchanged. Before configuring public DNS,
