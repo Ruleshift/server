@@ -120,4 +120,6 @@ type Room struct {
 	ModuleDatabase string          `json:"module_database"`
 	Seed           uint64          `json:"seed"`
 	CreatedAt      time.Time       `json:"created_at"`
+	InviteCode     string          `json:"invite_code"`
+	InviteDeadline time.Time       `json:"invite_deadline"`
 }

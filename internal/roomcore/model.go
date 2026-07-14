@@ -13,9 +13,15 @@ import (
 var (
 	ErrRoomNotFound     = errors.New("room not found")
 	ErrRoomExists       = errors.New("room already exists")
+	ErrInviteCodeExists = errors.New("room invite code already exists")
 	ErrRevisionMismatch = errors.New("expected revision does not match room revision")
 	ErrRuntimeClosed    = errors.New("room runtime is closed")
 	ErrQueueFull        = errors.New("room input queue is full")
+)
+
+const (
+	InviteCodeLength = 6
+	InviteCodeTTL    = 24 * time.Hour
 )
 
 type Route struct {
@@ -24,6 +30,8 @@ type Route struct {
 	ModuleDatabase string           `json:"module_database"`
 	Seed           uint64           `json:"seed"`
 	CreatedAt      time.Time        `json:"created_at"`
+	InviteCode     string           `json:"invite_code,omitempty"`
+	InviteDeadline time.Time        `json:"invite_deadline,omitzero"`
 }
 
 type State struct {

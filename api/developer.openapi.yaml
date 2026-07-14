@@ -168,9 +168,12 @@ components:
         finished_at: {type: [string, "null"], format: date-time}
     RoomRoute:
       type: object
-      required: [room_id, module, module_database, seed]
+      required: [room_id, module, module_database, seed, created_at, invite_code, invite_deadline]
       properties:
         room_id: {type: string}
         module: {$ref: "#/components/schemas/ModuleRef"}
         module_database: {type: string}
         seed: {type: integer, minimum: 0}
+        created_at: {type: string, format: date-time}
+        invite_code: {type: string, pattern: "^[0-9A-Z]{6}$", minLength: 6, maxLength: 6}
+        invite_deadline: {type: string, format: date-time, description: Expires exactly 24 hours after room creation}

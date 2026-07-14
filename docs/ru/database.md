@@ -11,6 +11,7 @@ database для каждой пары developer/module.
 - immutable `module_versions` с OCI- и descriptor-digests;
 - ограниченные `module_validation_runs`;
 - `room_routes`, закреплённые за developer/module/version/image digest.
+- уникальные шестисимвольные `room_invite_codes` с deadline 24 часа.
 
 Registry username, password и token здесь никогда не сохраняются.
 
@@ -34,6 +35,9 @@ immutable. Ruleshift компилирует декларацию в SQL и пр�
 Модули не получают credentials базы данных и не могут выполнять запросы к ней.
 Только trusted backends используют ограниченный Developer API
 `CreateRow`/`ListRows`.
+
+При создании комнаты route и код приглашения из `0-9A-Z` атомарно записываются
+в control database. Deadline равен ровно 24 часам после `room_routes.created_at`.
 
 ## Локальный PostgreSQL
 

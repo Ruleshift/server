@@ -11,6 +11,7 @@ each developer/module pair.
 - immutable `module_versions` with OCI and descriptor digests;
 - bounded `module_validation_runs`;
 - `room_routes` pinned to developer/module/version/image digest.
+- unique six-character `room_invite_codes` with a 24-hour deadline.
 
 Registry usernames, passwords, and tokens are never stored here.
 
@@ -33,6 +34,9 @@ Ruleshift compiles the declaration to SQL and verifies migration checksums.
 
 Modules do not receive database credentials and cannot query these databases.
 Only trusted backends use the bounded `CreateRow`/`ListRows` Developer API.
+
+Room creation inserts the route and its `0-9A-Z` invite code atomically in the
+control database. The deadline is exactly 24 hours after `room_routes.created_at`.
 
 ## Local PostgreSQL
 

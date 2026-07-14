@@ -279,6 +279,9 @@ namespace Ruleshift.Developer
         [JsonProperty("module")] public ModuleReferenceInfo Module { get; set; }
         [JsonProperty("module_database")] public string ModuleDatabase { get; set; }
         [JsonProperty("seed")] public ulong Seed { get; set; }
+        [JsonProperty("created_at")] public DateTime CreatedAt { get; set; }
+        [JsonProperty("invite_code")] public string InviteCode { get; set; }
+        [JsonProperty("invite_deadline")] public DateTime InviteDeadline { get; set; }
     }
 
     internal sealed class ApiError

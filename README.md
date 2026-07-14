@@ -142,8 +142,9 @@ token и внешнего egress.
 ## Статус проекта
 
 Уже реализовано: authoritative room runtime, protobuf v2 gateway, persistence,
-module ABI, Developer API v2, OCI module lifecycle, Kubernetes scheduling,
-observability, Unity/.NET SDK и conformance examples.
+24-часовые коды приглашения комнат, module ABI, Developer API v2, OCI module
+lifecycle, Kubernetes scheduling, observability, Unity/.NET SDK и conformance
+examples.
 
 В дальнейших итерациях: расширение SDK для player-клиентов, полноценный
 Steam-поток авторизации, более глубокие load tests и расширение card-game state.

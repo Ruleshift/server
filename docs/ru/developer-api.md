@@ -33,6 +33,9 @@ status, err := client.GetValidationStatus(ctx, module.Key, version.Ref.Version)
 room, err := client.CreateRoom(ctx, ruleshift.CreateRoomRequest{ModuleID: module.Key})
 ```
 
+`CreateRoom` возвращает шестисимвольный `invite_code` из `0-9A-Z` и
+`invite_deadline`, равный ровно 24 часам после `created_at`.
+
 Optional декларативные таблицы модуля доступны через `CreateRow` и `ListRows`.
 Ruleshift никогда не возвращает PostgreSQL credentials и не принимает
 произвольный SQL.

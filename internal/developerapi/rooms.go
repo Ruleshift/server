@@ -5,10 +5,18 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/Ruleshift/server/internal/controlplane"
 	"github.com/Ruleshift/server/internal/roomcore"
+)
+
+const (
+	inviteAlphabet          = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	maxInviteCodeAttempts   = 8
+	inviteRandomAcceptLimit = 252
 )
 
 type RoomManager struct {
@@ -16,6 +24,7 @@ type RoomManager struct {
 	Rooms        *roomcore.Registry
 	Routes       roomcore.Store
 	DatabaseName func(string, string) (string, error)
+	Clock        func() time.Time
 }
 
 func (m RoomManager) CreateRoom(ctx context.Context, developerID, moduleID, version string) (roomcore.Route, error) {
@@ -26,10 +35,6 @@ func (m RoomManager) CreateRoom(ctx context.Context, developerID, moduleID, vers
 	if err != nil {
 		return roomcore.Route{}, err
 	}
-	roomID, seed, err := newRoomIdentity()
-	if err != nil {
-		return roomcore.Route{}, err
-	}
 	database := developerID + "_" + moduleID
 	if m.DatabaseName != nil {
 		database, err = m.DatabaseName(developerID, moduleID)
@@ -37,11 +42,37 @@ func (m RoomManager) CreateRoom(ctx context.Context, developerID, moduleID, vers
 			return roomcore.Route{}, err
 		}
 	}
-	route := roomcore.Route{RoomID: roomID, Module: resolved.Ref, ModuleDatabase: database, Seed: seed}
-	if _, err = m.Rooms.Create(ctx, route); err != nil {
-		return roomcore.Route{}, err
+	clock := m.Clock
+	if clock == nil {
+		clock = func() time.Time { return time.Now().UTC() }
 	}
-	return route, nil
+	for range maxInviteCodeAttempts {
+		roomID, seed, identityErr := newRoomIdentity()
+		if identityErr != nil {
+			return roomcore.Route{}, identityErr
+		}
+		inviteCode, inviteErr := newInviteCode()
+		if inviteErr != nil {
+			return roomcore.Route{}, inviteErr
+		}
+		createdAt := clock().UTC()
+		route := roomcore.Route{
+			RoomID:         roomID,
+			Module:         resolved.Ref,
+			ModuleDatabase: database,
+			Seed:           seed,
+			CreatedAt:      createdAt,
+			InviteCode:     inviteCode,
+			InviteDeadline: createdAt.Add(roomcore.InviteCodeTTL),
+		}
+		if _, err = m.Rooms.Create(ctx, route); err == nil {
+			return route, nil
+		}
+		if !errors.Is(err, roomcore.ErrInviteCodeExists) {
+			return roomcore.Route{}, err
+		}
+	}
+	return roomcore.Route{}, fmt.Errorf("allocate unique room invite code after %d attempts: %w", maxInviteCodeAttempts, roomcore.ErrInviteCodeExists)
 }
 func (m RoomManager) GetRoom(ctx context.Context, developerID, roomID string) (roomcore.Route, error) {
 	if m.Routes == nil {
@@ -64,4 +95,26 @@ func newRoomIdentity() (string, uint64, error) {
 	id := hex.EncodeToString(value[:16])
 	seed := binary.LittleEndian.Uint64(value[16:])
 	return id, seed, nil
+}
+
+func newInviteCode() (string, error) {
+	var code [roomcore.InviteCodeLength]byte
+	var random [roomcore.InviteCodeLength]byte
+	for offset := 0; offset < len(code); {
+		if _, err := rand.Read(random[:]); err != nil {
+			return "", fmt.Errorf("generate room invite code: %w", err)
+		}
+		for _, value := range random {
+			// Reject the top four byte values so modulo 36 remains uniform.
+			if value >= inviteRandomAcceptLimit {
+				continue
+			}
+			code[offset] = inviteAlphabet[int(value)%len(inviteAlphabet)]
+			offset++
+			if offset == len(code) {
+				break
+			}
+		}
+	}
+	return string(code[:]), nil
 }

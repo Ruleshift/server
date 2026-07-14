@@ -18,12 +18,29 @@ func (p *Platform) RoomCoreStore() *RoomCoreStore { return &RoomCoreStore{platfo
 
 func (s *RoomCoreStore) Create(ctx context.Context, state roomcore.State, event roomcore.Event, snapshot roomcore.Snapshot) error {
 	r := state.Route
-	_, err := s.platform.control.ExecContext(ctx, `INSERT INTO room_routes(room_id,developer_id,module_id,module_version,image_digest,module_database,seed,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, r.RoomID, r.Module.DeveloperID, r.Module.ModuleID, r.Module.Version, r.Module.ImageDigest, r.ModuleDatabase, strconv.FormatUint(r.Seed, 10), r.CreatedAt)
+	controlTx, err := s.platform.control.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin room route transaction: %w", err)
+	}
+	defer controlTx.Rollback()
+	_, err = controlTx.ExecContext(ctx, `INSERT INTO room_routes(room_id,developer_id,module_id,module_version,image_digest,module_database,seed,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, r.RoomID, r.Module.DeveloperID, r.Module.ModuleID, r.Module.Version, r.Module.ImageDigest, r.ModuleDatabase, strconv.FormatUint(r.Seed, 10), r.CreatedAt)
 	if isUniqueViolation(err) {
 		return roomcore.ErrRoomExists
 	}
 	if err != nil {
 		return fmt.Errorf("insert room route: %w", err)
+	}
+	if r.InviteCode != "" {
+		_, err = controlTx.ExecContext(ctx, `INSERT INTO room_invite_codes(room_id,code,deadline) VALUES($1,$2,$3)`, r.RoomID, r.InviteCode, r.InviteDeadline)
+		if isUniqueViolation(err) {
+			return roomcore.ErrInviteCodeExists
+		}
+		if err != nil {
+			return fmt.Errorf("insert room invite code: %w", err)
+		}
+	}
+	if err = controlTx.Commit(); err != nil {
+		return fmt.Errorf("commit room route transaction: %w", err)
 	}
 	db, err := s.moduleDB(ctx, r.ModuleDatabase)
 	if err != nil {
@@ -161,7 +178,9 @@ func (s *RoomCoreStore) SaveSnapshot(ctx context.Context, value roomcore.Snapsho
 func (s *RoomCoreStore) Route(ctx context.Context, roomID string) (roomcore.Route, error) {
 	var value roomcore.Route
 	var seed string
-	err := s.platform.control.QueryRowContext(ctx, `SELECT developer_id,module_id,module_version,image_digest,module_database,seed::text,created_at FROM room_routes WHERE room_id=$1`, roomID).Scan(&value.Module.DeveloperID, &value.Module.ModuleID, &value.Module.Version, &value.Module.ImageDigest, &value.ModuleDatabase, &seed, &value.CreatedAt)
+	var inviteCode sql.NullString
+	var inviteDeadline sql.NullTime
+	err := s.platform.control.QueryRowContext(ctx, `SELECT r.developer_id,r.module_id,r.module_version,r.image_digest,r.module_database,r.seed::text,r.created_at,i.code,i.deadline FROM room_routes r LEFT JOIN room_invite_codes i ON i.room_id=r.room_id WHERE r.room_id=$1`, roomID).Scan(&value.Module.DeveloperID, &value.Module.ModuleID, &value.Module.Version, &value.Module.ImageDigest, &value.ModuleDatabase, &seed, &value.CreatedAt, &inviteCode, &inviteDeadline)
 	if errors.Is(err, sql.ErrNoRows) {
 		return roomcore.Route{}, roomcore.ErrRoomNotFound
 	}
@@ -169,6 +188,12 @@ func (s *RoomCoreStore) Route(ctx context.Context, roomID string) (roomcore.Rout
 		return roomcore.Route{}, err
 	}
 	value.RoomID = roomID
+	if inviteCode.Valid {
+		value.InviteCode = inviteCode.String
+	}
+	if inviteDeadline.Valid {
+		value.InviteDeadline = inviteDeadline.Time
+	}
 	value.Seed, err = strconv.ParseUint(seed, 10, 64)
 	return value, err
 }

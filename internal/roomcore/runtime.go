@@ -69,7 +69,17 @@ func Create(ctx context.Context, route Route, cfg RuntimeConfig) (*Runtime, erro
 		clock = func() time.Time { return time.Now().UTC() }
 	}
 	now := clock()
-	route.CreatedAt = now
+	if route.CreatedAt.IsZero() {
+		route.CreatedAt = now
+	} else {
+		route.CreatedAt = route.CreatedAt.UTC()
+	}
+	if route.InviteCode != "" {
+		if err := validateInviteCode(route.InviteCode); err != nil {
+			return nil, err
+		}
+		route.InviteDeadline = route.CreatedAt.Add(InviteCodeTTL)
+	}
 	transition, err := cfg.Module.NewState(ctx, operation(route, 0, now))
 	if err != nil {
 		return nil, err
@@ -77,13 +87,26 @@ func Create(ctx context.Context, route Route, cfg RuntimeConfig) (*Runtime, erro
 	if !transition.Changed {
 		return nil, fmt.Errorf("%w: NewState returned changed=false", module.ErrProtocolViolation)
 	}
-	state := State{Route: route, Opaque: transition.NextState, Status: "active", CreatedAt: now, UpdatedAt: now}
+	state := State{Route: route, Opaque: transition.NextState, Status: "active", CreatedAt: route.CreatedAt, UpdatedAt: now}
 	event := Event{RoomID: route.RoomID, Kind: EventRoomCreated, Delta: transition.Delta, StateDigest: state.Opaque.Digest, OccurredAt: now}
 	snapshot := Snapshot{RoomID: route.RoomID, State: state.Opaque, SavedAt: now}
 	if err := cfg.Store.Create(ctx, state, event, snapshot); err != nil {
 		return nil, err
 	}
 	return newRuntime(state, cfg), nil
+}
+
+func validateInviteCode(value string) error {
+	if len(value) != InviteCodeLength {
+		return fmt.Errorf("room invite code must contain %d characters", InviteCodeLength)
+	}
+	for i := range len(value) {
+		if (value[i] >= '0' && value[i] <= '9') || (value[i] >= 'A' && value[i] <= 'Z') {
+			continue
+		}
+		return fmt.Errorf("room invite code must use only 0-9 and A-Z")
+	}
+	return nil
 }
 
 func Restore(ctx context.Context, route Route, cfg RuntimeConfig) (*Runtime, error) {
