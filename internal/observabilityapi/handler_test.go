@@ -111,7 +111,12 @@ func TestCORSAllowsOnlyConfiguredOrigin(t *testing.T) {
 func fakePrometheus(t *testing.T, values map[string]float64) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		query := r.URL.Query().Get("query")
+		if err := r.ParseForm(); err != nil {
+			t.Errorf("parse Prometheus request: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		query := r.Form.Get("query")
 		value := values[query]
 		stamp := float64(time.Now().UnixMilli()) / 1000
 		w.Header().Set("Content-Type", "application/json")

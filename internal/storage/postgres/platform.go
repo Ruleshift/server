@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -11,7 +10,7 @@ import (
 
 	"github.com/Ruleshift/server/internal/auth"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Config struct {
@@ -23,13 +22,14 @@ type Config struct {
 }
 
 type Platform struct {
-	controlURL string
-	admin      *sql.DB
-	control    *sql.DB
-	cfg        Config
+	controlConfig *pgxpool.Config
+	admin         *pgxpool.Pool
+	control       *pgxpool.Pool
+	cfg           Config
 
 	mu        sync.Mutex
-	moduleDBs map[string]*sql.DB
+	moduleDBs map[string]*pgxpool.Pool
+	closed    bool
 }
 
 func Open(ctx context.Context, cfg Config) (*Platform, error) {
@@ -49,30 +49,34 @@ func Open(ctx context.Context, cfg Config) (*Platform, error) {
 		return nil, fmt.Errorf("developer id %q must match %s", cfg.DeveloperID, definitionNamePattern)
 	}
 
-	controlConfig, err := pgx.ParseConfig(cfg.ControlURL)
+	controlConfig, err := pgxpool.ParseConfig(cfg.ControlURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse control database URL: %w", err)
 	}
-	if controlConfig.Database == "" {
+	if controlConfig.ConnConfig.Database == "" {
 		return nil, fmt.Errorf("control database URL must select a database")
 	}
 
-	adminURL := cfg.AdminURL
-	if adminURL == "" {
-		adminConfig := controlConfig.Copy()
-		adminConfig.Database = "postgres"
-		adminURL = adminConfig.ConnString()
+	var adminConfig *pgxpool.Config
+	if cfg.AdminURL == "" {
+		adminConfig = controlConfig.Copy()
+		adminConfig.ConnConfig.Database = "postgres"
+	} else {
+		adminConfig, err = pgxpool.ParseConfig(cfg.AdminURL)
+		if err != nil {
+			return nil, fmt.Errorf("parse PostgreSQL admin URL: %w", err)
+		}
 	}
-	admin, err := openDatabase(ctx, adminURL)
+	admin, err := openDatabase(ctx, adminConfig)
 	if err != nil {
 		return nil, fmt.Errorf("open PostgreSQL admin connection: %w", err)
 	}
-	if err := ensureDatabase(ctx, admin, controlConfig.Database); err != nil {
+	if err := ensureDatabase(ctx, admin, controlConfig.ConnConfig.Database); err != nil {
 		admin.Close()
 		return nil, fmt.Errorf("ensure control database: %w", err)
 	}
 
-	control, err := openDatabase(ctx, cfg.ControlURL)
+	control, err := openDatabase(ctx, controlConfig)
 	if err != nil {
 		admin.Close()
 		return nil, fmt.Errorf("open control database: %w", err)
@@ -90,11 +94,11 @@ func Open(ctx context.Context, cfg Config) (*Platform, error) {
 	}
 
 	platform := &Platform{
-		controlURL: cfg.ControlURL,
-		admin:      admin,
-		control:    control,
-		cfg:        cfg,
-		moduleDBs:  make(map[string]*sql.DB),
+		controlConfig: controlConfig,
+		admin:         admin,
+		control:       control,
+		cfg:           cfg,
+		moduleDBs:     make(map[string]*pgxpool.Pool),
 	}
 	if err := platform.ensureDeveloper(ctx); err != nil {
 		platform.Close()
@@ -116,19 +120,15 @@ func (p *Platform) SaveIdentity(ctx context.Context, identity auth.Identity) err
 		providerUserID = identity.SteamID
 	}
 
-	tx, err := p.control.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin identity transaction: %w", err)
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `
+	return pgx.BeginFunc(ctx, p.control, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
 INSERT INTO users(id, display_name) VALUES ($1, $2)
 ON CONFLICT (id) DO UPDATE SET
     display_name = EXCLUDED.display_name,
     last_authenticated_at = NOW()`, identity.PlayerID, identity.DisplayName); err != nil {
-		return fmt.Errorf("upsert user: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `
+			return fmt.Errorf("upsert user: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
 INSERT INTO user_identities(provider, provider_user_id, user_id, app_id, steam_id, ownership_verified)
 VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (provider, provider_user_id) DO UPDATE SET
@@ -137,39 +137,34 @@ ON CONFLICT (provider, provider_user_id) DO UPDATE SET
     steam_id = EXCLUDED.steam_id,
     ownership_verified = EXCLUDED.ownership_verified,
     last_authenticated_at = NOW()`, provider, providerUserID, identity.PlayerID, identity.AppID, identity.SteamID, identity.OwnershipVerified); err != nil {
-		return fmt.Errorf("upsert user identity: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit identity transaction: %w", err)
-	}
-	return nil
+			return fmt.Errorf("upsert user identity: %w", err)
+		}
+		return nil
+	})
 }
 
 func (p *Platform) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	var firstErr error
+	if p.closed {
+		return nil
+	}
+	p.closed = true
 	for _, db := range p.moduleDBs {
-		if err := db.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
+		db.Close()
 	}
 	p.moduleDBs = nil
 	if p.control != nil {
-		if err := p.control.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
+		p.control.Close()
 	}
 	if p.admin != nil {
-		if err := p.admin.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
+		p.admin.Close()
 	}
-	return firstErr
+	return nil
 }
 
 func (p *Platform) ensureDeveloper(ctx context.Context) error {
-	_, err := p.control.ExecContext(ctx, `
+	_, err := p.control.Exec(ctx, `
 INSERT INTO developers(id, display_name) VALUES ($1, $2)
 ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, updated_at = NOW()`,
 		p.cfg.DeveloperID, p.cfg.DeveloperName)
@@ -179,43 +174,40 @@ ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, updated_at 
 	return nil
 }
 
-func (p *Platform) openModuleDatabase(ctx context.Context, databaseName, moduleURL string) (*sql.DB, error) {
+func (p *Platform) openModuleDatabase(ctx context.Context, databaseName string) (*pgxpool.Pool, error) {
 	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return nil, fmt.Errorf("PostgreSQL platform is closed")
+	}
 	if db := p.moduleDBs[databaseName]; db != nil {
-		p.mu.Unlock()
 		return db, nil
 	}
-	p.mu.Unlock()
 
-	db, err := openDatabase(ctx, moduleURL)
+	config := p.controlConfig.Copy()
+	config.ConnConfig.Database = databaseName
+	db, err := openDatabase(ctx, config)
 	if err != nil {
 		return nil, err
 	}
-	p.mu.Lock()
-	if existing := p.moduleDBs[databaseName]; existing != nil {
-		p.mu.Unlock()
-		db.Close()
-		return existing, nil
-	}
 	p.moduleDBs[databaseName] = db
-	p.mu.Unlock()
 	return db, nil
 }
 
-func ensureDatabase(ctx context.Context, admin *sql.DB, name string) error {
+func ensureDatabase(ctx context.Context, admin *pgxpool.Pool, name string) error {
 	if !validPostgresIdentifier(name) {
 		return fmt.Errorf("unsafe PostgreSQL database name %q", name)
 	}
 	var exists bool
-	if err := admin.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)`, name).Scan(&exists); err != nil {
+	if err := admin.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)`, name).Scan(&exists); err != nil {
 		return fmt.Errorf("inspect PostgreSQL database %q: %w", name, err)
 	}
 	if exists {
 		return nil
 	}
-	if _, err := admin.ExecContext(ctx, `CREATE DATABASE `+quoteIdentifier(name)); err != nil {
+	if _, err := admin.Exec(ctx, `CREATE DATABASE `+pgx.Identifier{name}.Sanitize()); err != nil {
 		// A concurrent provisioner may have won the race; verify before failing.
-		if checkErr := admin.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)`, name).Scan(&exists); checkErr == nil && exists {
+		if checkErr := admin.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)`, name).Scan(&exists); checkErr == nil && exists {
 			return nil
 		}
 		return fmt.Errorf("create PostgreSQL database %q: %w", name, err)
@@ -223,26 +215,16 @@ func ensureDatabase(ctx context.Context, admin *sql.DB, name string) error {
 	return nil
 }
 
-func openDatabase(ctx context.Context, databaseURL string) (*sql.DB, error) {
-	config, err := pgx.ParseConfig(databaseURL)
+func openDatabase(ctx context.Context, config *pgxpool.Config) (*pgxpool.Pool, error) {
+	db, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, err
 	}
-	db := stdlib.OpenDB(*config)
-	if err := db.PingContext(ctx); err != nil {
+	if err := db.Ping(ctx); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return db, nil
-}
-
-func databaseURL(baseURL, databaseName string) (string, error) {
-	config, err := pgx.ParseConfig(baseURL)
-	if err != nil {
-		return "", fmt.Errorf("parse database URL: %w", err)
-	}
-	config.Database = databaseName
-	return config.ConnString(), nil
 }
 
 func validPostgresIdentifier(value string) bool {
@@ -256,10 +238,6 @@ func validPostgresIdentifier(value string) bool {
 		return false
 	}
 	return true
-}
-
-func quoteIdentifier(value string) string {
-	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
 }
 
 func moduleDatabaseName(prefix, developerID, moduleName string) (string, error) {

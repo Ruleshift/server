@@ -1,6 +1,7 @@
 # Документация Ruleshift на русском языке
 
 - [Архитектура](architecture.md)
+- [Политика зависимостей](dependency-policy.md)
 - [Card Game как модуль protocol v2](cardgame-module.md)
 - [Архитектура базы данных](database.md)
 - [Developer API v2](developer-api.md)

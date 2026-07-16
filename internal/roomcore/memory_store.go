@@ -3,6 +3,7 @@ package roomcore
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/Ruleshift/server/internal/module"
@@ -117,7 +118,7 @@ func (s *MemoryStore) Route(ctx context.Context, roomID string) (Route, error) {
 }
 
 func cloneOpaque(value module.OpaqueState) module.OpaqueState {
-	value.Payload = append([]byte(nil), value.Payload...)
+	value.Payload = slices.Clone(value.Payload)
 	return value
 }
 func cloneState(value State) State          { value.Opaque = cloneOpaque(value.Opaque); return value }

@@ -2,18 +2,17 @@ package observabilityapi
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
-	"strconv"
+	"strings"
 	"time"
+
+	prometheusapi "github.com/prometheus/client_golang/api"
+	prometheusv1 "github.com/prometheus/client_golang/api/prometheus/v1"
+	"github.com/prometheus/common/model"
 )
 
-type PrometheusClient struct {
-	baseURL string
-	client  *http.Client
-}
+type PrometheusClient struct{ api prometheusv1.API }
 
 type Sample struct {
 	Value     float64
@@ -21,78 +20,37 @@ type Sample struct {
 	Present   bool
 }
 
-func NewPrometheusClient(baseURL string, client *http.Client) *PrometheusClient {
-	return &PrometheusClient{baseURL: baseURL, client: client}
+func NewPrometheusClient(baseURL string, client *http.Client) (*PrometheusClient, error) {
+	apiClient, err := prometheusapi.NewClient(prometheusapi.Config{
+		Address: strings.TrimRight(baseURL, "/"),
+		Client:  client,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create Prometheus API client: %w", err)
+	}
+	return &PrometheusClient{api: prometheusv1.NewAPI(apiClient)}, nil
 }
 
 func (c *PrometheusClient) Query(ctx context.Context, query string) (Sample, error) {
-	target := c.baseURL + "/api/v1/query?" + url.Values{"query": []string{query}}.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	value, _, err := c.api.Query(ctx, query, time.Now())
 	if err != nil {
 		return Sample{}, err
 	}
-	response, err := c.client.Do(request)
-	if err != nil {
-		return Sample{}, err
+	if value == nil {
+		return Sample{}, fmt.Errorf("Prometheus query returned no result")
 	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return Sample{}, fmt.Errorf("Prometheus status %d", response.StatusCode)
-	}
-	var envelope struct {
-		Status string `json:"status"`
-		Data   struct {
-			ResultType string          `json:"resultType"`
-			Result     json.RawMessage `json:"result"`
-		} `json:"data"`
-		Error string `json:"error"`
-	}
-	if err = json.NewDecoder(response.Body).Decode(&envelope); err != nil {
-		return Sample{}, err
-	}
-	if envelope.Status != "success" {
-		return Sample{}, fmt.Errorf("Prometheus query failed: %s", envelope.Error)
-	}
-	var pair []json.RawMessage
-	switch envelope.Data.ResultType {
-	case "vector":
-		var values []struct {
-			Value []json.RawMessage `json:"value"`
-		}
-		if err = json.Unmarshal(envelope.Data.Result, &values); err != nil {
-			return Sample{}, err
-		}
-		if len(values) == 0 {
+	switch result := value.(type) {
+	case model.Vector:
+		if len(result) == 0 {
 			return Sample{}, nil
 		}
-		pair = values[0].Value
-	case "scalar":
-		if err = json.Unmarshal(envelope.Data.Result, &pair); err != nil {
-			return Sample{}, err
+		if result[0].Histogram != nil {
+			return Sample{}, fmt.Errorf("Prometheus query returned a histogram sample")
 		}
+		return Sample{Value: float64(result[0].Value), Timestamp: result[0].Timestamp.Time().UTC(), Present: true}, nil
+	case *model.Scalar:
+		return Sample{Value: float64(result.Value), Timestamp: result.Timestamp.Time().UTC(), Present: true}, nil
 	default:
-		return Sample{}, fmt.Errorf("unsupported Prometheus result type %q", envelope.Data.ResultType)
+		return Sample{}, fmt.Errorf("unsupported Prometheus result type %s", value.Type())
 	}
-	if len(pair) != 2 {
-		return Sample{}, fmt.Errorf("invalid Prometheus sample")
-	}
-	var timestamp float64
-	var rawValue string
-	if err = json.Unmarshal(pair[0], &timestamp); err != nil {
-		return Sample{}, err
-	}
-	if err = json.Unmarshal(pair[1], &rawValue); err != nil {
-		return Sample{}, err
-	}
-	value, err := strconv.ParseFloat(rawValue, 64)
-	if err != nil {
-		return Sample{}, err
-	}
-	seconds, fraction := mathModf(timestamp)
-	return Sample{Value: value, Timestamp: time.Unix(int64(seconds), int64(fraction*1e9)).UTC(), Present: true}, nil
-}
-
-func mathModf(value float64) (float64, float64) {
-	whole := float64(int64(value))
-	return whole, value - whole
 }

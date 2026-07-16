@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"slices"
 	"strings"
 
 	modulev1 "github.com/Ruleshift/server/internal/moduleruntime/generated/moduleruntimev1"
@@ -260,7 +261,7 @@ func (s *server) decodeState(value *anypb.Any) (state, error) {
 	return result, nil
 }
 func (s *server) project(value state, viewer *modulev1.Viewer) ([]byte, error) {
-	result := view{FEN: value.FEN, Side: value.Side, Status: value.Status, LastMove: value.LastMove, CurrentPlayer: value.CurrentPlayer, DeckCount: len(value.Deck), Discard: append([]string(nil), value.Discard...)}
+	result := view{FEN: value.FEN, Side: value.Side, Status: value.Status, LastMove: value.LastMove, CurrentPlayer: value.CurrentPlayer, DeckCount: len(value.Deck), Discard: slices.Clone(value.Discard)}
 	for _, p := range value.Players {
 		projected := viewPlayer{ID: p.ID, HasSecret: p.Secret != nil, HandCount: len(p.Hand)}
 		canSee := viewer != nil && (viewer.Scope == modulev1.ViewScope_VIEW_SCOPE_FULL || (viewer.Scope == modulev1.ViewScope_VIEW_SCOPE_PLAYER && viewer.PlayerId == p.ID))
@@ -269,7 +270,7 @@ func (s *server) project(value state, viewer *modulev1.Viewer) ([]byte, error) {
 				x := *p.Secret
 				projected.Secret = &x
 			}
-			projected.PrivateHand = append([]string(nil), p.Hand...)
+			projected.PrivateHand = slices.Clone(p.Hand)
 		}
 		result.Players = append(result.Players, projected)
 	}

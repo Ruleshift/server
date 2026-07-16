@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func TestManagerGenerateAndValidate(t *testing.T) {
@@ -28,6 +30,13 @@ func TestManagerGenerateAndValidate(t *testing.T) {
 	}
 	if claims.AssignmentID != "assignment-1" || claims.MatchID != "match-1" || claims.ServerID != "server-1" || claims.PlayerID != "player-1" {
 		t.Fatalf("claims = %#v, want generated values", claims)
+	}
+	parsed, _, err := jwt.NewParser().ParseUnverified(token, &jwt.RegisteredClaims{})
+	if err != nil {
+		t.Fatalf("parse generated JWT: %v", err)
+	}
+	if parsed.Method.Alg() != jwt.SigningMethodHS256.Alg() {
+		t.Fatalf("token method = %s, want HS256", parsed.Method.Alg())
 	}
 }
 

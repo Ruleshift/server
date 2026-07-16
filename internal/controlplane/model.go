@@ -11,11 +11,16 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/Ruleshift/server/internal/module"
+	"github.com/distribution/reference"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
 )
 
@@ -25,12 +30,10 @@ const (
 )
 
 var (
-	ErrModuleNotFound      = errors.New("module not found")
-	ErrVersionNotFound     = errors.New("module version not found")
-	ErrVersionConflict     = errors.New("module version already exists with different digest")
-	ErrUnauthorized        = errors.New("resource belongs to another developer")
-	semverPattern          = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
-	digestReferencePattern = regexp.MustCompile(`^.+@sha256:[0-9a-f]{64}$`)
+	ErrModuleNotFound  = errors.New("module not found")
+	ErrVersionNotFound = errors.New("module version not found")
+	ErrVersionConflict = errors.New("module version already exists with different digest")
+	ErrUnauthorized    = errors.New("resource belongs to another developer")
 )
 
 type VersionStatus string
@@ -125,13 +128,15 @@ func (r PublishRequest) Validate() error {
 	if r.Manifest.ModuleID != r.ModuleID {
 		return fmt.Errorf("manifest module_id does not match URL")
 	}
-	if !semverPattern.MatchString(r.Manifest.Version) {
+	if _, err := semver.StrictNewVersion(r.Manifest.Version); err != nil {
 		return fmt.Errorf("version %q is not SemVer", r.Manifest.Version)
 	}
 	if r.Manifest.ABIVersion != module.ABIVersion {
 		return fmt.Errorf("unsupported module ABI %d", r.Manifest.ABIVersion)
 	}
-	if !digestReferencePattern.MatchString(r.ImageRef) {
+	imageReference, err := reference.ParseDockerRef(r.ImageRef)
+	digested, hasDigest := imageReference.(reference.Digested)
+	if err != nil || !hasDigest || digested.Digest().Algorithm().String() != "sha256" || len(digested.Digest().Encoded()) != sha256.Size*2 || digested.Digest().String() != strings.ToLower(digested.Digest().String()) {
 		return fmt.Errorf("OCI image reference must contain @sha256:<64 lowercase hex>")
 	}
 	if len(r.DescriptorSet) == 0 || len(r.DescriptorSet) > MaxDescriptorBytes {
@@ -188,45 +193,38 @@ func validateDescriptorSet(raw []byte, manifest Manifest) error {
 	if len(set.File) == 0 {
 		return fmt.Errorf("protobuf descriptor set contains no files")
 	}
-	types := map[string]struct{}{}
 	for _, file := range set.File {
 		pkg := file.GetPackage()
 		if pkg == "ruleshift.v1" || pkg == "ruleshift.v2" || pkg == "ruleshift.module.v1" {
 			return fmt.Errorf("descriptor package %q conflicts with Ruleshift core", pkg)
 		}
-		for _, message := range file.MessageType {
-			collectDescriptorTypes(types, pkg, "", message)
-		}
+	}
+	files, err := protodesc.NewFiles(&set)
+	if err != nil {
+		return fmt.Errorf("validate protobuf descriptor set: %w", err)
 	}
 	required := append([]string{manifest.StateTypeURL}, manifest.CommandTypeURLs...)
 	for _, value := range required {
-		if _, ok := types[value]; !ok {
+		const typeURLPrefix = "type.googleapis.com/"
+		if !strings.HasPrefix(value, typeURLPrefix) {
 			return fmt.Errorf("manifest type URL %q is absent from descriptor set", value)
+		}
+		descriptor, findErr := files.FindDescriptorByName(protoreflect.FullName(strings.TrimPrefix(value, typeURLPrefix)))
+		if findErr != nil {
+			return fmt.Errorf("manifest type URL %q is absent from descriptor set", value)
+		}
+		if _, ok := descriptor.(protoreflect.MessageDescriptor); !ok {
+			return fmt.Errorf("manifest type URL %q does not identify a protobuf message", value)
 		}
 	}
 	return nil
-}
-
-func collectDescriptorTypes(target map[string]struct{}, pkg, parent string, message *descriptorpb.DescriptorProto) {
-	name := message.GetName()
-	if parent != "" {
-		name = parent + "." + name
-	}
-	full := name
-	if pkg != "" {
-		full = pkg + "." + name
-	}
-	target["type.googleapis.com/"+full] = struct{}{}
-	for _, nested := range message.NestedType {
-		collectDescriptorTypes(target, pkg, name, nested)
-	}
 }
 
 func (r PublishRequest) Version() Version {
 	digest := sha256.Sum256(r.DescriptorSet)
 	imageDigest := r.ImageRef[strings.LastIndex(r.ImageRef, "@")+1:]
 	now := time.Now().UTC()
-	return Version{Ref: module.ModuleRef{DeveloperID: r.DeveloperID, ModuleID: r.ModuleID, Version: r.Manifest.Version, ImageDigest: imageDigest}, ImageRef: r.ImageRef, ABIVersion: r.Manifest.ABIVersion, DescriptorDigest: "sha256:" + hex.EncodeToString(digest[:]), DescriptorSet: append([]byte(nil), r.DescriptorSet...), Manifest: r.Manifest, CredentialName: r.CredentialName, Status: StatusValidating, CreatedAt: now, UpdatedAt: now}
+	return Version{Ref: module.ModuleRef{DeveloperID: r.DeveloperID, ModuleID: r.ModuleID, Version: r.Manifest.Version, ImageDigest: imageDigest}, ImageRef: r.ImageRef, ABIVersion: r.Manifest.ABIVersion, DescriptorDigest: "sha256:" + hex.EncodeToString(digest[:]), DescriptorSet: slices.Clone(r.DescriptorSet), Manifest: r.Manifest, CredentialName: r.CredentialName, Status: StatusValidating, CreatedAt: now, UpdatedAt: now}
 }
 
 func ValidateAdditiveMigrations(migrations []DatabaseMigration) error {

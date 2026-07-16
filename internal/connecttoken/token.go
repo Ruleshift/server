@@ -1,17 +1,16 @@
 package connecttoken
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
 	"errors"
 	"fmt"
-	"strconv"
+	"slices"
 	"strings"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
-const tokenVersion = "rst1"
+const tokenIssuer = "ruleshift-connect"
 
 var (
 	ErrInvalidToken = errors.New("invalid connect token")
@@ -24,6 +23,12 @@ type Claims struct {
 	ServerID     string
 	PlayerID     string
 	ExpiresAt    time.Time
+}
+
+type tokenClaims struct {
+	MatchID  string `json:"match_id"`
+	ServerID string `json:"server_id"`
+	jwt.RegisteredClaims
 }
 
 type Manager struct {
@@ -44,10 +49,7 @@ func NewManagerWithClock(secret []byte, clock func() time.Time) (*Manager, error
 	if clock == nil {
 		return nil, fmt.Errorf("connect token clock must not be nil")
 	}
-
-	copied := make([]byte, len(secret))
-	copy(copied, secret)
-	return &Manager{secret: copied, clock: clock}, nil
+	return &Manager{secret: slices.Clone(secret), clock: clock}, nil
 }
 
 func (m *Manager) Generate(claims Claims) (string, error) {
@@ -58,47 +60,47 @@ func (m *Manager) Generate(claims Claims) (string, error) {
 		return "", ErrExpiredToken
 	}
 
-	payload := encodePayload(claims)
-	signature := m.sign([]byte(payload))
-	return strings.Join([]string{
-		tokenVersion,
-		base64.RawURLEncoding.EncodeToString([]byte(payload)),
-		base64.RawURLEncoding.EncodeToString(signature),
-	}, "."), nil
+	value := tokenClaims{
+		MatchID:  claims.MatchID,
+		ServerID: claims.ServerID,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    tokenIssuer,
+			Subject:   claims.PlayerID,
+			ExpiresAt: jwt.NewNumericDate(claims.ExpiresAt.UTC()),
+			ID:        claims.AssignmentID,
+		},
+	}
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, value).SignedString(m.secret)
 }
 
 func (m *Manager) Validate(token string) (Claims, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 || parts[0] != tokenVersion {
-		return Claims{}, ErrInvalidToken
-	}
-
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return Claims{}, fmt.Errorf("%w: decode payload", ErrInvalidToken)
-	}
-	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil {
-		return Claims{}, fmt.Errorf("%w: decode signature", ErrInvalidToken)
-	}
-	if !hmac.Equal(signature, m.sign(payload)) {
-		return Claims{}, fmt.Errorf("%w: signature mismatch", ErrInvalidToken)
-	}
-
-	claims, err := decodePayload(string(payload))
-	if err != nil {
-		return Claims{}, err
-	}
-	if !claims.ExpiresAt.After(m.clock()) {
+	var value tokenClaims
+	_, err := jwt.ParseWithClaims(token, &value, func(*jwt.Token) (any, error) {
+		return m.secret, nil
+	},
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+		jwt.WithIssuer(tokenIssuer),
+		jwt.WithExpirationRequired(),
+		jwt.WithTimeFunc(m.clock),
+	)
+	if errors.Is(err, jwt.ErrTokenExpired) {
 		return Claims{}, ErrExpiredToken
 	}
-	return claims, nil
-}
+	if err != nil {
+		return Claims{}, fmt.Errorf("%w: %v", ErrInvalidToken, err)
+	}
 
-func (m *Manager) sign(payload []byte) []byte {
-	mac := hmac.New(sha256.New, m.secret)
-	_, _ = mac.Write(payload)
-	return mac.Sum(nil)
+	claims := Claims{
+		AssignmentID: value.ID,
+		MatchID:      value.MatchID,
+		ServerID:     value.ServerID,
+		PlayerID:     value.Subject,
+		ExpiresAt:    value.ExpiresAt.Time.UTC(),
+	}
+	if err = validateClaims(claims); err != nil {
+		return Claims{}, fmt.Errorf("%w: %v", ErrInvalidToken, err)
+	}
+	return claims, nil
 }
 
 func validateClaims(claims Claims) error {
@@ -115,45 +117,9 @@ func validateClaims(claims Claims) error {
 		if strings.TrimSpace(field.value) == "" {
 			return fmt.Errorf("%s must not be empty", field.name)
 		}
-		if strings.Contains(field.value, "\n") {
-			return fmt.Errorf("%s must not contain newline", field.name)
-		}
 	}
 	if claims.ExpiresAt.IsZero() {
 		return fmt.Errorf("expires_at must not be zero")
 	}
 	return nil
-}
-
-func encodePayload(claims Claims) string {
-	return strings.Join([]string{
-		claims.AssignmentID,
-		claims.MatchID,
-		claims.ServerID,
-		claims.PlayerID,
-		strconv.FormatInt(claims.ExpiresAt.Unix(), 10),
-	}, "\n")
-}
-
-func decodePayload(payload string) (Claims, error) {
-	fields := strings.Split(payload, "\n")
-	if len(fields) != 5 {
-		return Claims{}, fmt.Errorf("%w: payload field count", ErrInvalidToken)
-	}
-	expiresUnix, err := strconv.ParseInt(fields[4], 10, 64)
-	if err != nil {
-		return Claims{}, fmt.Errorf("%w: parse expiry", ErrInvalidToken)
-	}
-
-	claims := Claims{
-		AssignmentID: fields[0],
-		MatchID:      fields[1],
-		ServerID:     fields[2],
-		PlayerID:     fields[3],
-		ExpiresAt:    time.Unix(expiresUnix, 0).UTC(),
-	}
-	if err := validateClaims(claims); err != nil {
-		return Claims{}, fmt.Errorf("%w: %v", ErrInvalidToken, err)
-	}
-	return claims, nil
 }

@@ -2,13 +2,15 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/Ruleshift/server/pkg/ruleshift"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 var (
@@ -42,7 +44,7 @@ func (p *Platform) ListTableRows(ctx context.Context, developerID, moduleKey, ta
 		return ruleshift.RowsPage{}, err
 	}
 	var exists bool
-	if err := db.QueryRowContext(ctx, `
+	if err := db.QueryRow(ctx, `
 SELECT EXISTS (
     SELECT 1 FROM information_schema.tables
     WHERE table_schema = 'public' AND table_type = 'BASE TABLE' AND table_name = $1
@@ -53,40 +55,31 @@ SELECT EXISTS (
 		return ruleshift.RowsPage{}, ErrTableNotFound
 	}
 
-	rows, err := db.QueryContext(ctx, `SELECT * FROM `+quoteIdentifier(tableName)+` LIMIT $1 OFFSET $2`, limit, offset)
+	rows, err := db.Query(ctx, `SELECT * FROM `+pgx.Identifier{tableName}.Sanitize()+` LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return ruleshift.RowsPage{}, fmt.Errorf("list module table rows: %w", err)
 	}
-	defer rows.Close()
-	columns, err := rows.Columns()
+	fields := rows.FieldDescriptions()
+	columns := make([]string, len(fields))
+	for i := range fields {
+		columns[i] = fields[i].Name
+	}
+	resultRows, err := pgx.AppendRows(make([]map[string]any, 0, limit), rows, pgx.RowToMap)
 	if err != nil {
-		return ruleshift.RowsPage{}, fmt.Errorf("read module table columns: %w", err)
+		return ruleshift.RowsPage{}, fmt.Errorf("read module table rows: %w", err)
 	}
 	page := ruleshift.RowsPage{
 		Module:  module,
 		Table:   tableName,
 		Columns: columns,
-		Rows:    make([]map[string]any, 0, limit),
+		Rows:    resultRows,
 		Limit:   limit,
 		Offset:  offset,
 	}
-	for rows.Next() {
-		values := make([]any, len(columns))
-		destinations := make([]any, len(columns))
-		for i := range values {
-			destinations[i] = &values[i]
+	for _, row := range page.Rows {
+		for column, value := range row {
+			row[column] = normalizeDatabaseValue(value)
 		}
-		if err := rows.Scan(destinations...); err != nil {
-			return ruleshift.RowsPage{}, fmt.Errorf("scan module table row: %w", err)
-		}
-		row := make(map[string]any, len(columns))
-		for i, column := range columns {
-			row[column] = normalizeDatabaseValue(values[i])
-		}
-		page.Rows = append(page.Rows, row)
-	}
-	if err := rows.Err(); err != nil {
-		return ruleshift.RowsPage{}, fmt.Errorf("iterate module table rows: %w", err)
 	}
 	return page, nil
 }
@@ -115,7 +108,7 @@ func (p *Platform) CreateTableRow(ctx context.Context, developerID, moduleKey, t
 		return ruleshift.Row{}, err
 	}
 	var exists bool
-	if err := db.QueryRowContext(ctx, `
+	if err := db.QueryRow(ctx, `
 SELECT EXISTS (
     SELECT 1 FROM information_schema.tables
     WHERE table_schema = 'public' AND table_type = 'BASE TABLE' AND table_name = $1
@@ -125,26 +118,19 @@ SELECT EXISTS (
 	if !exists {
 		return ruleshift.Row{}, ErrTableNotFound
 	}
-	columnRows, err := db.QueryContext(ctx, `
+	columnRows, err := db.Query(ctx, `
 SELECT column_name FROM information_schema.columns
 WHERE table_schema = 'public' AND table_name = $1`, tableName)
 	if err != nil {
 		return ruleshift.Row{}, fmt.Errorf("list module table columns: %w", err)
 	}
-	allowedColumns := make(map[string]struct{})
-	for columnRows.Next() {
-		var column string
-		if err := columnRows.Scan(&column); err != nil {
-			columnRows.Close()
-			return ruleshift.Row{}, fmt.Errorf("scan module table column: %w", err)
-		}
+	columns, err := pgx.CollectRows(columnRows, pgx.RowTo[string])
+	if err != nil {
+		return ruleshift.Row{}, fmt.Errorf("read module table columns: %w", err)
+	}
+	allowedColumns := make(map[string]struct{}, len(columns))
+	for _, column := range columns {
 		allowedColumns[column] = struct{}{}
-	}
-	if err := columnRows.Close(); err != nil {
-		return ruleshift.Row{}, fmt.Errorf("close module table columns: %w", err)
-	}
-	if err := columnRows.Err(); err != nil {
-		return ruleshift.Row{}, fmt.Errorf("iterate module table columns: %w", err)
 	}
 	for column := range values {
 		if _, exists := allowedColumns[column]; !exists {
@@ -155,54 +141,34 @@ WHERE table_schema = 'public' AND table_name = $1`, tableName)
 	if err != nil {
 		return ruleshift.Row{}, fmt.Errorf("encode row values: %w", err)
 	}
-	rows, err := db.QueryContext(ctx,
-		`INSERT INTO `+quoteIdentifier(tableName)+` SELECT * FROM json_populate_record(NULL::`+quoteIdentifier(tableName)+`, $1::json) RETURNING *`,
+	rows, err := db.Query(ctx,
+		`INSERT INTO `+pgx.Identifier{tableName}.Sanitize()+` SELECT * FROM json_populate_record(NULL::`+pgx.Identifier{tableName}.Sanitize()+`, $1::json) RETURNING *`,
 		string(payload))
 	if err != nil {
 		return ruleshift.Row{}, fmt.Errorf("insert module table row: %w", err)
 	}
-	defer rows.Close()
-	columns, err := rows.Columns()
+	resultValues, err := pgx.CollectExactlyOneRow(rows, pgx.RowToMap)
 	if err != nil {
-		return ruleshift.Row{}, fmt.Errorf("read inserted row columns: %w", err)
+		return ruleshift.Row{}, fmt.Errorf("read inserted row: %w", err)
 	}
-	if !rows.Next() {
-		if err := rows.Err(); err != nil {
-			return ruleshift.Row{}, fmt.Errorf("read inserted row: %w", err)
-		}
-		return ruleshift.Row{}, fmt.Errorf("inserted row was not returned")
+	for column, value := range resultValues {
+		resultValues[column] = normalizeDatabaseValue(value)
 	}
-	resultValues := make([]any, len(columns))
-	destinations := make([]any, len(columns))
-	for i := range resultValues {
-		destinations[i] = &resultValues[i]
-	}
-	if err := rows.Scan(destinations...); err != nil {
-		return ruleshift.Row{}, fmt.Errorf("scan inserted row: %w", err)
-	}
-	result := ruleshift.Row{Module: module, Table: tableName, Values: make(map[string]any, len(columns))}
-	for i, column := range columns {
-		result.Values[column] = normalizeDatabaseValue(resultValues[i])
-	}
-	return result, nil
+	return ruleshift.Row{Module: module, Table: tableName, Values: resultValues}, nil
 }
 
-func (p *Platform) moduleDatabase(ctx context.Context, developerID, moduleKey string) (string, *sql.DB, error) {
+func (p *Platform) moduleDatabase(ctx context.Context, developerID, moduleKey string) (string, *pgxpool.Pool, error) {
 	var databaseName string
-	err := p.control.QueryRowContext(ctx, `
+	err := p.control.QueryRow(ctx, `
 SELECT database_name FROM modules
 WHERE developer_id = $1 AND module_key = $2`, developerID, moduleKey).Scan(&databaseName)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil, ErrModuleNotFound
 	}
 	if err != nil {
 		return "", nil, fmt.Errorf("get module database location: %w", err)
 	}
-	moduleURL, err := databaseURL(p.controlURL, databaseName)
-	if err != nil {
-		return "", nil, err
-	}
-	db, err := p.openModuleDatabase(ctx, databaseName, moduleURL)
+	db, err := p.openModuleDatabase(ctx, databaseName)
 	if err != nil {
 		return "", nil, fmt.Errorf("open module database: %w", err)
 	}
@@ -213,6 +179,9 @@ func normalizeDatabaseValue(value any) any {
 	switch typed := value.(type) {
 	case time.Time:
 		return typed.UTC().Format(time.RFC3339Nano)
+	case pgtype.Numeric:
+		decoded, _ := typed.Value()
+		return decoded
 	case []byte:
 		if json.Valid(typed) {
 			var decoded any

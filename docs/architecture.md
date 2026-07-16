@@ -30,6 +30,10 @@ flowchart LR
 There are no in-process game reducers in core. Hidden Number, Xiangqi and Card
 Game live under `examples/modules` and are built as independent OCI services.
 
+Generic infrastructure belongs to maintained libraries; authoritative domain
+invariants remain project-owned. The boundary and accepted dependencies are
+listed in the [dependency policy](dependency-policy.md).
+
 ## Version and room invariants
 
 A room route pins `developer_id + module_id + version + image_digest`. New rooms

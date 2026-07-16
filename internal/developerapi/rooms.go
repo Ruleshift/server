@@ -4,19 +4,19 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/Ruleshift/server/internal/controlplane"
 	"github.com/Ruleshift/server/internal/roomcore"
+	"github.com/google/uuid"
+	gonanoid "github.com/matoous/go-nanoid/v2"
 )
 
 const (
-	inviteAlphabet          = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	maxInviteCodeAttempts   = 8
-	inviteRandomAcceptLimit = 252
+	inviteAlphabet        = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	maxInviteCodeAttempts = 8
 )
 
 type RoomManager struct {
@@ -88,33 +88,21 @@ func (m RoomManager) GetRoom(ctx context.Context, developerID, roomID string) (r
 	return route, nil
 }
 func newRoomIdentity() (string, uint64, error) {
-	var value [24]byte
-	if _, err := rand.Read(value[:]); err != nil {
+	roomID, err := uuid.NewRandom()
+	if err != nil {
 		return "", 0, err
 	}
-	id := hex.EncodeToString(value[:16])
-	seed := binary.LittleEndian.Uint64(value[16:])
-	return id, seed, nil
+	var seed [8]byte
+	if _, err = rand.Read(seed[:]); err != nil {
+		return "", 0, err
+	}
+	return roomID.String(), binary.LittleEndian.Uint64(seed[:]), nil
 }
 
 func newInviteCode() (string, error) {
-	var code [roomcore.InviteCodeLength]byte
-	var random [roomcore.InviteCodeLength]byte
-	for offset := 0; offset < len(code); {
-		if _, err := rand.Read(random[:]); err != nil {
-			return "", fmt.Errorf("generate room invite code: %w", err)
-		}
-		for _, value := range random {
-			// Reject the top four byte values so modulo 36 remains uniform.
-			if value >= inviteRandomAcceptLimit {
-				continue
-			}
-			code[offset] = inviteAlphabet[int(value)%len(inviteAlphabet)]
-			offset++
-			if offset == len(code) {
-				break
-			}
-		}
+	code, err := gonanoid.Generate(inviteAlphabet, roomcore.InviteCodeLength)
+	if err != nil {
+		return "", fmt.Errorf("generate room invite code: %w", err)
 	}
-	return string(code[:]), nil
+	return code, nil
 }

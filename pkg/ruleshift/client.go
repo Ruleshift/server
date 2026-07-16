@@ -4,55 +4,39 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
-	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/go-resty/resty/v2"
 )
 
 const maxResponseBytes = 4 << 20
 
 type Client struct {
-	baseURL    string
-	apiKey     string
-	httpClient *http.Client
+	http *resty.Client
 }
 
 func (c *Client) PublishModuleVersion(ctx context.Context, request PublishModuleVersionRequest) (ModuleVersion, error) {
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
 	manifest, err := json.Marshal(request.Manifest)
 	if err != nil {
 		return ModuleVersion{}, fmt.Errorf("encode module manifest: %w", err)
 	}
-	parts := []struct {
-		name  string
-		value []byte
-	}{{"manifest", manifest}, {"descriptor_set", request.DescriptorSet}, {"conformance_vectors", request.ConformanceVectors}, {"oci_reference", []byte(request.OCIReference)}}
+	fields := []*resty.MultipartField{
+		{Param: "manifest", Reader: bytes.NewReader(manifest)},
+		{Param: "descriptor_set", Reader: bytes.NewReader(request.DescriptorSet)},
+		{Param: "conformance_vectors", Reader: bytes.NewReader(request.ConformanceVectors)},
+		{Param: "oci_reference", Reader: strings.NewReader(request.OCIReference)},
+	}
 	if request.RegistryCredential != "" {
-		parts = append(parts, struct {
-			name  string
-			value []byte
-		}{"registry_credential", []byte(request.RegistryCredential)})
-	}
-	for _, part := range parts {
-		field, createErr := writer.CreateFormField(part.name)
-		if createErr != nil {
-			return ModuleVersion{}, createErr
-		}
-		if _, createErr = field.Write(part.value); createErr != nil {
-			return ModuleVersion{}, createErr
-		}
-	}
-	if err = writer.Close(); err != nil {
-		return ModuleVersion{}, err
+		fields = append(fields, &resty.MultipartField{Param: "registry_credential", Reader: strings.NewReader(request.RegistryCredential)})
 	}
 	path := "/v2/developer/modules/" + url.PathEscape(request.ModuleID) + "/versions"
 	var version ModuleVersion
-	err = c.doReader(ctx, http.MethodPost, path, &body, writer.FormDataContentType(), &version)
+	err = c.execute(c.request(ctx, &version).SetMultipartFields(fields...), http.MethodPost, path)
 	return version, err
 }
 
@@ -105,9 +89,21 @@ func NewClient(baseURL, apiKey string, httpClient *http.Client) (*Client, error)
 		return nil, fmt.Errorf("ruleshift developer API key must not be empty")
 	}
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		defaultClient := *http.DefaultClient
+		httpClient = &defaultClient
 	}
-	return &Client{baseURL: baseURL, apiKey: apiKey, httpClient: httpClient}, nil
+	client := resty.NewWithClient(httpClient).
+		SetBaseURL(baseURL).
+		SetAuthToken(apiKey).
+		SetHeader("Accept", "application/json").
+		SetResponseBodyLimit(maxResponseBytes).
+		SetJSONUnmarshaler(func(data []byte, value any) error {
+			if len(data) == 0 {
+				return nil
+			}
+			return json.Unmarshal(data, value)
+		})
+	return &Client{http: client}, nil
 }
 
 func (c *Client) ListRows(ctx context.Context, moduleKey, table string, limit, offset int) (RowsPage, error) {
@@ -119,11 +115,8 @@ func (c *Client) ListRows(ctx context.Context, moduleKey, table string, limit, o
 		query.Set("offset", strconv.Itoa(offset))
 	}
 	path := "/v2/developer/modules/" + url.PathEscape(moduleKey) + "/tables/" + url.PathEscape(table) + "/rows"
-	if encoded := query.Encode(); encoded != "" {
-		path += "?" + encoded
-	}
 	var page RowsPage
-	err := c.do(ctx, http.MethodGet, path, nil, &page)
+	err := c.execute(c.request(ctx, &page).SetQueryParamsFromValues(query), http.MethodGet, path)
 	return page, err
 }
 
@@ -135,78 +128,36 @@ func (c *Client) CreateRow(ctx context.Context, moduleKey, table string, values 
 }
 
 func (c *Client) do(ctx context.Context, method, path string, requestBody any, responseBody any) error {
-	var body io.Reader
+	request := c.request(ctx, responseBody)
 	if requestBody != nil {
-		encoded, err := json.Marshal(requestBody)
-		if err != nil {
-			return fmt.Errorf("encode ruleshift request: %w", err)
-		}
-		body = bytes.NewReader(encoded)
+		request.SetHeader("Content-Type", "application/json").SetBody(requestBody)
 	}
-	request, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
-	if err != nil {
-		return fmt.Errorf("create ruleshift request: %w", err)
-	}
-	request.Header.Set("Authorization", "Bearer "+c.apiKey)
-	request.Header.Set("Accept", "application/json")
-	if requestBody != nil {
-		request.Header.Set("Content-Type", "application/json")
-	}
-
-	response, err := c.httpClient.Do(request)
-	if err != nil {
-		return fmt.Errorf("call ruleshift API: %w", err)
-	}
-	defer response.Body.Close()
-	limited := io.LimitReader(response.Body, maxResponseBytes+1)
-	payload, err := io.ReadAll(limited)
-	if err != nil {
-		return fmt.Errorf("read ruleshift response: %w", err)
-	}
-	if len(payload) > maxResponseBytes {
-		return fmt.Errorf("ruleshift response exceeds %d bytes", maxResponseBytes)
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		apiErr := &APIError{StatusCode: response.StatusCode, Code: "request_failed", Message: http.StatusText(response.StatusCode)}
-		_ = json.Unmarshal(payload, apiErr)
-		return apiErr
-	}
-	if responseBody == nil || len(payload) == 0 {
-		return nil
-	}
-	if err := json.Unmarshal(payload, responseBody); err != nil {
-		return fmt.Errorf("decode ruleshift response: %w", err)
-	}
-	return nil
+	return c.execute(request, method, path)
 }
 
-func (c *Client) doReader(ctx context.Context, method, path string, body io.Reader, contentType string, responseBody any) error {
-	request, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
-	if err != nil {
-		return fmt.Errorf("create ruleshift request: %w", err)
+func (c *Client) request(ctx context.Context, result any) *resty.Request {
+	request := c.http.R().SetContext(ctx).ForceContentType("application/json")
+	if result != nil {
+		request.SetResult(result)
 	}
-	request.Header.Set("Authorization", "Bearer "+c.apiKey)
-	request.Header.Set("Accept", "application/json")
-	request.Header.Set("Content-Type", contentType)
-	response, err := c.httpClient.Do(request)
-	if err != nil {
-		return fmt.Errorf("call ruleshift API: %w", err)
-	}
-	defer response.Body.Close()
-	payload, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
-	if err != nil {
-		return err
-	}
-	if len(payload) > maxResponseBytes {
+	return request
+}
+
+func (c *Client) execute(request *resty.Request, method, path string) error {
+	response, err := request.Execute(method, path)
+	if errors.Is(err, resty.ErrResponseBodyTooLarge) {
 		return fmt.Errorf("ruleshift response exceeds %d bytes", maxResponseBytes)
 	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		apiErr := &APIError{StatusCode: response.StatusCode, Code: "request_failed", Message: http.StatusText(response.StatusCode)}
-		_ = json.Unmarshal(payload, apiErr)
-		return apiErr
+	if err != nil {
+		if response != nil && response.IsSuccess() {
+			return fmt.Errorf("decode ruleshift response: %w", err)
+		}
+		return fmt.Errorf("call ruleshift API: %w", err)
 	}
-	if responseBody != nil && len(payload) > 0 {
-		return json.Unmarshal(payload, responseBody)
+	if response.IsSuccess() {
+		return nil
 	}
-	return nil
+	apiErr := &APIError{StatusCode: response.StatusCode(), Code: "request_failed", Message: http.StatusText(response.StatusCode())}
+	_ = json.Unmarshal(response.Body(), apiErr)
+	return apiErr
 }

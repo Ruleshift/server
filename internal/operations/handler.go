@@ -1,9 +1,10 @@
 package operations
 
 import (
+	"cmp"
 	"encoding/json"
 	"net/http"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -132,7 +133,7 @@ func (h *Handler) snapshot() []Room {
 		}
 		values = append(values, Room{PublicRoomRef: h.refs.Room(value.RoomID), Status: status, Revision: strconv.FormatUint(value.Revision, 10), ModuleID: value.ModuleID, ModuleVersion: value.Version, CreatedAt: value.CreatedAt, LastActivityAt: value.UpdatedAt, Connections: connections, QueueDepth: value.QueueDepth, QueueCapacity: value.QueueCapacity, QueueRatio: value.QueueSaturation})
 	}
-	sort.Slice(values, func(i, j int) bool { return values[i].PublicRoomRef < values[j].PublicRoomRef })
+	slices.SortFunc(values, func(a, b Room) int { return cmp.Compare(a.PublicRoomRef, b.PublicRoomRef) })
 	return values
 }
 

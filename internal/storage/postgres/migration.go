@@ -1,19 +1,23 @@
 package postgres
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"embed"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type databaseMigration struct {
@@ -88,19 +92,19 @@ func validateMigrations(migrations []databaseMigration) error {
 	return nil
 }
 
-func applyMigrations(ctx context.Context, db *sql.DB, component string, migrations []databaseMigration) error {
+func applyMigrations(ctx context.Context, db *pgxpool.Pool, component string, migrations []databaseMigration) error {
 	if !definitionNamePattern.MatchString(component) {
 		return fmt.Errorf("migration component %q must match %s", component, definitionNamePattern)
 	}
 	if err := validateMigrations(migrations); err != nil {
 		return err
 	}
-	if _, err := db.ExecContext(ctx, createMigrationTableSQL); err != nil {
+	if _, err := db.Exec(ctx, createMigrationTableSQL); err != nil {
 		return fmt.Errorf("create migration table: %w", err)
 	}
 
-	ordered := append([]databaseMigration(nil), migrations...)
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Version < ordered[j].Version })
+	ordered := slices.Clone(migrations)
+	slices.SortFunc(ordered, func(a, b databaseMigration) int { return cmp.Compare(a.Version, b.Version) })
 	for _, migration := range ordered {
 		if err := applyMigration(ctx, db, component, migration); err != nil {
 			return err
@@ -109,51 +113,41 @@ func applyMigrations(ctx context.Context, db *sql.DB, component string, migratio
 	return nil
 }
 
-func applyMigration(ctx context.Context, db *sql.DB, component string, migration databaseMigration) error {
+func applyMigration(ctx context.Context, db *pgxpool.Pool, component string, migration databaseMigration) error {
 	sum := sha256.Sum256([]byte(migration.SQL))
 	checksum := hex.EncodeToString(sum[:])
 
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin migration %s/%d: %w", component, migration.Version, err)
-	}
-	defer tx.Rollback()
-
-	lockSum := sha256.Sum256([]byte(component + "/" + strconv.FormatUint(migration.Version, 10)))
-	lockKey := int64(binary.BigEndian.Uint64(lockSum[:8]))
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, lockKey); err != nil {
-		return fmt.Errorf("lock migration %s/%d: %w", component, migration.Version, err)
-	}
-
-	var storedName, storedChecksum string
-	err = tx.QueryRowContext(ctx,
-		`SELECT name, checksum FROM ruleshift_schema_migrations WHERE component = $1 AND version = $2`,
-		component, strconv.FormatUint(migration.Version, 10),
-	).Scan(&storedName, &storedChecksum)
-	switch {
-	case err == nil:
-		if storedName != migration.Name || storedChecksum != checksum {
-			return fmt.Errorf("migration %s/%d changed after it was applied", component, migration.Version)
+	return pgx.BeginFunc(ctx, db, func(tx pgx.Tx) error {
+		lockSum := sha256.Sum256([]byte(component + "/" + strconv.FormatUint(migration.Version, 10)))
+		lockKey := int64(binary.BigEndian.Uint64(lockSum[:8]))
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, lockKey); err != nil {
+			return fmt.Errorf("lock migration %s/%d: %w", component, migration.Version, err)
 		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit migration inspection %s/%d: %w", component, migration.Version, err)
+
+		var storedName, storedChecksum string
+		err := tx.QueryRow(ctx,
+			`SELECT name, checksum FROM ruleshift_schema_migrations WHERE component = $1 AND version = $2`,
+			component, strconv.FormatUint(migration.Version, 10),
+		).Scan(&storedName, &storedChecksum)
+		switch {
+		case err == nil:
+			if storedName != migration.Name || storedChecksum != checksum {
+				return fmt.Errorf("migration %s/%d changed after it was applied", component, migration.Version)
+			}
+			return nil
+		case !errors.Is(err, pgx.ErrNoRows):
+			return fmt.Errorf("inspect migration %s/%d: %w", component, migration.Version, err)
+		}
+
+		if _, err := tx.Exec(ctx, migration.SQL); err != nil {
+			return fmt.Errorf("apply migration %s/%d (%s): %w", component, migration.Version, migration.Name, err)
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO ruleshift_schema_migrations(component, version, name, checksum) VALUES ($1, $2, $3, $4)`,
+			component, strconv.FormatUint(migration.Version, 10), migration.Name, checksum,
+		); err != nil {
+			return fmt.Errorf("record migration %s/%d: %w", component, migration.Version, err)
 		}
 		return nil
-	case err != sql.ErrNoRows:
-		return fmt.Errorf("inspect migration %s/%d: %w", component, migration.Version, err)
-	}
-
-	if _, err := tx.ExecContext(ctx, migration.SQL); err != nil {
-		return fmt.Errorf("apply migration %s/%d (%s): %w", component, migration.Version, migration.Name, err)
-	}
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO ruleshift_schema_migrations(component, version, name, checksum) VALUES ($1, $2, $3, $4)`,
-		component, strconv.FormatUint(migration.Version, 10), migration.Name, checksum,
-	); err != nil {
-		return fmt.Errorf("record migration %s/%d: %w", component, migration.Version, err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit migration %s/%d: %w", component, migration.Version, err)
-	}
-	return nil
+	})
 }

@@ -3,10 +3,11 @@ package postgres
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
 )
 
 var ErrInvalidDeveloperAPIKey = errors.New("invalid developer API key")
@@ -23,7 +24,7 @@ func (p *Platform) EnsureDeveloperAPIKey(ctx context.Context, developerID, displ
 	}
 	hash := sha256.Sum256([]byte(apiKey))
 	keyID := developerID + ":" + displayName
-	_, err := p.control.ExecContext(ctx, `
+	_, err := p.control.Exec(ctx, `
 INSERT INTO developer_api_keys(id, developer_id, display_name, key_hash)
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (id) DO UPDATE SET
@@ -42,12 +43,12 @@ func (p *Platform) AuthenticateDeveloper(ctx context.Context, apiKey string) (st
 	}
 	hash := sha256.Sum256([]byte(apiKey))
 	var developerID string
-	err := p.control.QueryRowContext(ctx, `
+	err := p.control.QueryRow(ctx, `
 UPDATE developer_api_keys
 SET last_used_at = NOW()
 WHERE key_hash = $1 AND revoked_at IS NULL
 RETURNING developer_id`, hash[:]).Scan(&developerID)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return "", ErrInvalidDeveloperAPIKey
 	}
 	if err != nil {

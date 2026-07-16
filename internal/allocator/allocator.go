@@ -2,12 +2,12 @@ package allocator
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type ServerStatus string
@@ -166,10 +166,11 @@ func (r *Registry) Reserve(ctx context.Context, req ReservationRequest) (Reserva
 			continue
 		}
 
-		reservationID, err := randomID("reservation")
+		id, err := uuid.NewRandom()
 		if err != nil {
-			return Reservation{}, err
+			return Reservation{}, fmt.Errorf("generate reservation id: %w", err)
 		}
+		reservationID := "reservation_" + id.String()
 		reservation := &Reservation{
 			ReservationID: reservationID,
 			ServerID:      server.ServerID,
@@ -339,12 +340,4 @@ func copyReservation(reservation *Reservation) Reservation {
 		return Reservation{}
 	}
 	return *reservation
-}
-
-func randomID(prefix string) (string, error) {
-	var bytes [16]byte
-	if _, err := rand.Read(bytes[:]); err != nil {
-		return "", fmt.Errorf("generate %s id: %w", prefix, err)
-	}
-	return prefix + "_" + hex.EncodeToString(bytes[:]), nil
 }

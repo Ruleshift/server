@@ -2,8 +2,6 @@ package roomcore
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -11,6 +9,7 @@ import (
 
 	"github.com/Ruleshift/server/internal/metrics"
 	"github.com/Ruleshift/server/internal/module"
+	"github.com/google/uuid"
 )
 
 const SnapshotInterval uint64 = 100
@@ -365,14 +364,7 @@ func (r *Runtime) projectDelta(ctx context.Context, before State, delta module.O
 }
 
 func operation(route Route, revision uint64, now time.Time) module.Operation {
-	return module.Operation{OperationID: newOperationID(), RoomID: route.RoomID, Revision: revision, Now: now, Seed: route.Seed}
-}
-func newOperationID() string {
-	var value [16]byte
-	if _, err := rand.Read(value[:]); err != nil {
-		return fmt.Sprintf("fallback-%d", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(value[:])
+	return module.Operation{OperationID: uuid.NewString(), RoomID: route.RoomID, Revision: revision, Now: now, Seed: route.Seed}
 }
 
 func replayTransition(ctx context.Context, runtime module.Runtime, state State, event Event) (module.Transition, error) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -106,7 +107,11 @@ func New(cfg Config) (*Handler, error) {
 		cfg.Thresholds = DefaultThresholds()
 	}
 	client := &http.Client{Timeout: cfg.Timeout}
-	h := &Handler{cfg: cfg, prometheus: NewPrometheusClient(strings.TrimRight(cfg.PrometheusURL, "/"), client), upstream: client, mux: http.NewServeMux()}
+	prometheus, err := NewPrometheusClient(cfg.PrometheusURL, client)
+	if err != nil {
+		return nil, err
+	}
+	h := &Handler{cfg: cfg, prometheus: prometheus, upstream: client, mux: http.NewServeMux()}
 	h.mux.HandleFunc("GET /healthz", h.health)
 	h.mux.HandleFunc("GET /v1/overview", h.overview)
 	h.mux.HandleFunc("GET /v1/rooms", h.rooms)
@@ -199,7 +204,7 @@ func (h *Handler) buildOverview(ctx context.Context) Overview {
 		value.Reasons = append(value.Reasons, "metrics_unavailable")
 		return value
 	}
-	seconds, fraction := mathModf(upTimestamp.sample.Value)
+	seconds, fraction := math.Modf(upTimestamp.sample.Value)
 	value.SourceTimestamp = time.Unix(int64(seconds), int64(fraction*1e9)).UTC()
 	age := now.Sub(value.SourceTimestamp)
 	if up.sample.Value < 1 || age > thresholds.UnavailableAfter {

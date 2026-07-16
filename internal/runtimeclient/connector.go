@@ -3,6 +3,7 @@ package runtimeclient
 import (
 	"context"
 	"encoding/hex"
+	"slices"
 	"time"
 
 	"github.com/Ruleshift/server/internal/controlplane"
@@ -44,7 +45,7 @@ func descriptionFrom(response *modulev1.DescribeResponse) controlplane.Descripti
 		Version:            response.Version,
 		ABIVersion:         response.AbiVersion,
 		StateTypeURL:       response.StateTypeUrl,
-		CommandTypeURLs:    append([]string(nil), response.CommandTypeUrls...),
+		CommandTypeURLs:    slices.Clone(response.CommandTypeUrls),
 		DescriptorDigest:   "sha256:" + hex.EncodeToString(response.DescriptorSetSha256),
 		SupportsPlayerLeft: response.SupportsPlayerLeft,
 	}

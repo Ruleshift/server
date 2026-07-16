@@ -27,6 +27,26 @@ func TestPublishRequestRejectsTagOnlyAndReservedTypes(t *testing.T) {
 		t.Fatal("reserved Ruleshift type accepted")
 	}
 }
+
+func TestPublishRequestUsesStrictSemVerAndOCIReferenceValidation(t *testing.T) {
+	request := validPublish()
+	request.Manifest.Version = "v1.2.3"
+	if err := request.Validate(); err == nil {
+		t.Fatal("non-SemVer v-prefix accepted")
+	}
+
+	request = validPublish()
+	request.ImageRef = "not a registry reference@sha256:" + strings.Repeat("a", 64)
+	if err := request.Validate(); err == nil {
+		t.Fatal("invalid OCI repository accepted")
+	}
+
+	request = validPublish()
+	request.ImageRef = "registry.example/sample@sha256:" + strings.Repeat("A", 64)
+	if err := request.Validate(); err == nil {
+		t.Fatal("uppercase OCI digest accepted")
+	}
+}
 func TestVersionPublishIsIdempotentAndDigestConflictFails(t *testing.T) {
 	ctx := context.Background()
 	store := NewMemoryStore()

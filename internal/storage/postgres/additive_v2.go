@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Ruleshift/server/internal/controlplane"
+	"github.com/jackc/pgx/v5"
 )
 
 type AdditiveMigrationApplier struct{ platform *Platform }
@@ -28,11 +29,7 @@ func (a *AdditiveMigrationApplier) ApplyAdditive(ctx context.Context, version co
 	if err = ensureDatabase(ctx, a.platform.admin, name); err != nil {
 		return err
 	}
-	url, err := databaseURL(a.platform.controlURL, name)
-	if err != nil {
-		return err
-	}
-	db, err := a.platform.openModuleDatabase(ctx, name, url)
+	db, err := a.platform.openModuleDatabase(ctx, name)
 	if err != nil {
 		return err
 	}
@@ -64,19 +61,19 @@ func compileAdditiveMigration(value controlplane.DatabaseMigration) (string, err
 			if err != nil {
 				return "", err
 			}
-			line := "    " + quoteIdentifier(column.Name) + " " + sqlType
+			line := "    " + pgx.Identifier{column.Name}.Sanitize() + " " + sqlType
 			if !column.Nullable || column.PrimaryKey {
 				line += " NOT NULL"
 			}
 			columns = append(columns, line)
 			if column.PrimaryKey {
-				primary = append(primary, quoteIdentifier(column.Name))
+				primary = append(primary, pgx.Identifier{column.Name}.Sanitize())
 			}
 		}
 		if len(primary) > 0 {
 			columns = append(columns, "    PRIMARY KEY ("+strings.Join(primary, ", ")+")")
 		}
-		statements = append(statements, "CREATE TABLE "+quoteIdentifier(table.Name)+" (\n"+strings.Join(columns, ",\n")+"\n);")
+		statements = append(statements, "CREATE TABLE "+pgx.Identifier{table.Name}.Sanitize()+" (\n"+strings.Join(columns, ",\n")+"\n);")
 	}
 	return strings.Join(statements, "\n\n"), nil
 }

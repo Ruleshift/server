@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"google.golang.org/protobuf/types/known/anypb"
@@ -57,7 +58,7 @@ func NewOpaque(typeURL string, payload []byte, limit int) (OpaqueState, error) {
 	if len(payload) > limit {
 		return OpaqueState{}, fmt.Errorf("%w: payload is %d bytes; maximum is %d", ErrProtocolViolation, len(payload), limit)
 	}
-	copyPayload := append([]byte(nil), payload...)
+	copyPayload := slices.Clone(payload)
 	return OpaqueState{TypeURL: typeURL, Payload: copyPayload, Digest: sha256.Sum256(copyPayload)}, nil
 }
 
@@ -76,7 +77,7 @@ func MessageFromAny(value *anypb.Any) (OpaqueState, error) {
 }
 
 func (s OpaqueState) Any() *anypb.Any {
-	return &anypb.Any{TypeUrl: s.TypeURL, Value: append([]byte(nil), s.Payload...)}
+	return &anypb.Any{TypeUrl: s.TypeURL, Value: slices.Clone(s.Payload)}
 }
 
 type JoinMode uint8

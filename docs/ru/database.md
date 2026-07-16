@@ -3,6 +3,11 @@
 Ruleshift использует одну control PostgreSQL database и отдельную изолированную
 database для каждой пары developer/module.
 
+Сервис использует native-интерфейс `pgxpool`, а не адаптер `database/sql`.
+Стандартные параметры пула pgx — например `pool_max_conns`, `pool_min_conns` и
+`pool_max_conn_idle_time` — можно добавить в `RULESHIFT_DATABASE_URL`; те же
+лимиты наследуются пулами module databases.
+
 ## Control database
 
 - `developers` и хешированные `developer_api_keys`;

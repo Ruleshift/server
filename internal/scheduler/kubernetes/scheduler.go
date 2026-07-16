@@ -3,6 +3,7 @@
 package kubernetes
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -10,7 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,7 +25,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/utils/ptr"
 )
 
 const modulePort int32 = 50051
@@ -81,7 +84,7 @@ func (s *Scheduler) EnsureTenant(ctx context.Context, developerID string) error 
 	if _, err := s.client.NetworkingV1().NetworkPolicies(namespace).Create(ctx, policy, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		return err
 	}
-	ingress := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: "allow-ruleshift-core", Namespace: namespace}, Spec: networkingv1.NetworkPolicySpec{PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{"ruleshift.io/component": "module"}}, PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress}, Ingress: []networkingv1.NetworkPolicyIngressRule{{From: []networkingv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"ruleshift.io/core": "true"}}}}, Ports: []networkingv1.NetworkPolicyPort{{Protocol: protocolPtr(corev1.ProtocolTCP), Port: intstrPtr(intstr.FromInt32(modulePort))}}}}}}
+	ingress := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: "allow-ruleshift-core", Namespace: namespace}, Spec: networkingv1.NetworkPolicySpec{PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{"ruleshift.io/component": "module"}}, PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress}, Ingress: []networkingv1.NetworkPolicyIngressRule{{From: []networkingv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"ruleshift.io/core": "true"}}}}, Ports: []networkingv1.NetworkPolicyPort{{Protocol: ptr.To(corev1.ProtocolTCP), Port: ptr.To(intstr.FromInt32(modulePort))}}}}}}
 	if _, err := s.client.NetworkingV1().NetworkPolicies(namespace).Create(ctx, ingress, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		return err
 	}
@@ -159,50 +162,42 @@ func (s *Scheduler) WaitReady(ctx context.Context, version controlplane.Version,
 	namespace := TenantNamespace(version.Ref.DeveloperID)
 	lastStatus := fmt.Sprintf("deployment %s/%s has not reported status", namespace, name)
 	recoverableFailures := make(map[string]time.Time)
-	ticker := time.NewTicker(s.pollInterval)
-	defer ticker.Stop()
-	for {
+	err := wait.PollUntilContextCancel(ctx, s.pollInterval, true, func(ctx context.Context) (bool, error) {
 		deployment, err := s.client.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
-			if ctx.Err() != nil {
-				return readinessContextError(ctx.Err(), lastStatus)
-			}
-			return err
+			return false, err
 		}
 		lastStatus = deploymentReadinessStatus(deployment, nil, nil)
 		// MVP validates that the module workload has become callable. It does not
 		// enforce a replica-count policy; HA requirements are deferred until later.
 		if deployment.Status.ReadyReplicas > 0 && deployment.Status.UpdatedReplicas > 0 {
-			return nil
+			return true, nil
 		}
 		if err = deploymentReplicaFailure(deployment); err != nil {
-			return err
+			return false, err
 		}
 		selector, err := metav1.LabelSelectorAsSelector(deployment.Spec.Selector)
 		if err != nil {
-			return fmt.Errorf("select deployment pods: %w", err)
+			return false, fmt.Errorf("select deployment pods: %w", err)
 		}
 		pods, listErr := s.client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector.String()})
 		if listErr != nil {
 			lastStatus = deploymentReadinessStatus(deployment, nil, listErr)
-			if ctx.Err() != nil {
-				return readinessContextError(ctx.Err(), lastStatus)
-			}
 			if !apierrors.IsForbidden(listErr) {
-				return fmt.Errorf("list deployment pods: %w", listErr)
+				return false, fmt.Errorf("list deployment pods: %w", listErr)
 			}
 		} else {
 			lastStatus = deploymentReadinessStatus(deployment, pods.Items, nil)
 			if err = s.podBlockingFailure(pods.Items, recoverableFailures); err != nil {
-				return err
+				return false, err
 			}
 		}
-		select {
-		case <-ctx.Done():
-			return readinessContextError(ctx.Err(), lastStatus)
-		case <-ticker.C:
-		}
+		return false, nil
+	})
+	if ctx.Err() != nil {
+		return readinessContextError(ctx.Err(), lastStatus)
 	}
+	return err
 }
 
 func (s *Scheduler) reconcileLimitRange(ctx context.Context, desired *corev1.LimitRange) error {
@@ -242,8 +237,8 @@ type recoverablePodFailure struct {
 }
 
 func (s *Scheduler) podBlockingFailure(pods []corev1.Pod, firstSeen map[string]time.Time) error {
-	items := append([]corev1.Pod(nil), pods...)
-	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+	items := slices.Clone(pods)
+	slices.SortFunc(items, func(a, b corev1.Pod) int { return cmp.Compare(a.Name, b.Name) })
 	now := s.now()
 	activeRecoverableFailures := make(map[string]struct{})
 	recoverableFailures := make([]recoverablePodFailure, 0)
@@ -335,8 +330,8 @@ func deploymentReadinessStatus(deployment *appsv1.Deployment, pods []corev1.Pod,
 	if podListErr != nil {
 		parts = append(parts, "pod diagnostics unavailable: "+boundedDiagnostic(podListErr.Error()))
 	} else {
-		items := append([]corev1.Pod(nil), pods...)
-		sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+		items := slices.Clone(pods)
+		slices.SortFunc(items, func(a, b corev1.Pod) int { return cmp.Compare(a.Name, b.Name) })
 		const maxPods = 4
 		for i := 0; i < len(items) && i < maxPods; i++ {
 			parts = append(parts, fmt.Sprintf("pod %s=%s%s%s", items[i].Name, items[i].Status.Phase, podContainerReadiness(&items[i]), podFalseConditionDetail(&items[i])))
@@ -400,8 +395,7 @@ func (s *Scheduler) Cleanup(ctx context.Context, version controlplane.Version, p
 		return nil
 	}
 	namespace, name := TenantNamespace(version.Ref.DeveloperID), WorkloadName(version)
-	policy := metav1.DeletePropagationBackground
-	if err := s.client.AppsV1().Deployments(namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &policy}); err != nil && !apierrors.IsNotFound(err) {
+	if err := s.client.AppsV1().Deployments(namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: ptr.To(metav1.DeletePropagationBackground)}); err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}
 	if err := s.client.CoreV1().Services(namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
@@ -434,11 +428,6 @@ func (s *Scheduler) ResolveDeployment(ctx context.Context, ref module.ModuleRef)
 }
 
 func BuildDeployment(version controlplane.Version, namespace, name string) *appsv1.Deployment {
-	automount := false
-	runAsNonRoot := true
-	allowEscalation := false
-	readOnly := true
-	runAsUser := int64(65532)
 	labels := map[string]string{"ruleshift.io/component": "module", "ruleshift.io/workload": name, "ruleshift.io/module": stableLabel(version.Ref.ModuleID), "ruleshift.io/version": stableLabel(version.Ref.Version)}
 	pullSecrets := []corev1.LocalObjectReference{}
 	if version.CredentialName != "" {
@@ -453,11 +442,11 @@ func BuildDeployment(version controlplane.Version, namespace, name string) *apps
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
-					AutomountServiceAccountToken: &automount,
+					AutomountServiceAccountToken: ptr.To(false),
 					ImagePullSecrets:             pullSecrets,
 					SecurityContext: &corev1.PodSecurityContext{
-						RunAsNonRoot:   &runAsNonRoot,
-						RunAsUser:      &runAsUser,
+						RunAsNonRoot:   ptr.To(true),
+						RunAsUser:      ptr.To[int64](65532),
 						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 					},
 					Containers: []corev1.Container{{
@@ -484,9 +473,9 @@ func BuildDeployment(version controlplane.Version, namespace, name string) *apps
 							},
 						},
 						SecurityContext: &corev1.SecurityContext{
-							AllowPrivilegeEscalation: &allowEscalation,
-							ReadOnlyRootFilesystem:   &readOnly,
-							RunAsNonRoot:             &runAsNonRoot,
+							AllowPrivilegeEscalation: ptr.To(false),
+							ReadOnlyRootFilesystem:   ptr.To(true),
+							RunAsNonRoot:             ptr.To(true),
 							Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 						},
 						ReadinessProbe: &corev1.Probe{
@@ -518,8 +507,6 @@ func randomToken() (string, error) {
 	}
 	return base64.RawURLEncoding.EncodeToString(value[:]), nil
 }
-func protocolPtr(value corev1.Protocol) *corev1.Protocol     { return &value }
-func intstrPtr(value intstr.IntOrString) *intstr.IntOrString { return &value }
 func createNamespace(ctx context.Context, client kubernetes.Interface, value *corev1.Namespace) error {
 	_, err := client.CoreV1().Namespaces().Create(ctx, value, metav1.CreateOptions{})
 	if apierrors.IsAlreadyExists(err) {

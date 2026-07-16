@@ -2,18 +2,18 @@ package matchmaking
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/subtle"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/Ruleshift/server/internal/allocator"
 	"github.com/Ruleshift/server/internal/connecttoken"
 	"github.com/Ruleshift/server/internal/metrics"
+	"github.com/google/uuid"
 )
 
 type LifecycleState string
@@ -208,10 +208,11 @@ func (s *Service) CreateTicket(ctx context.Context, req CreateTicketRequest) (Ti
 		}
 	}
 
-	ticketID, err := randomID("ticket")
+	id, err := uuid.NewRandom()
 	if err != nil {
-		return Ticket{}, err
+		return Ticket{}, fmt.Errorf("generate ticket id: %w", err)
 	}
+	ticketID := "ticket_" + id.String()
 	ticket := &Ticket{
 		TicketID:       ticketID,
 		GameID:         req.GameID,
@@ -289,10 +290,11 @@ func (s *Service) FormMatches(ctx context.Context) ([]Match, error) {
 				break
 			}
 
-			matchID, err := randomID("match")
+			id, err := uuid.NewRandom()
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("generate match id: %w", err)
 			}
+			matchID := "match_" + id.String()
 			first := s.tickets[ticketIDs[0]]
 			match := &Match{
 				MatchID:   matchID,
@@ -374,12 +376,13 @@ func (s *Service) AssignMatch(ctx context.Context, matchID string) ([]Assignment
 	expiresAt := now.Add(s.cfg.AssignmentTTL)
 	assignments := make([]Assignment, 0, len(match.PlayerIDs))
 	for i, playerID := range match.PlayerIDs {
-		assignmentID, err := randomID("assignment")
+		id, err := uuid.NewRandom()
 		if err != nil {
 			_ = s.allocator.Release(context.Background(), reservation.ReservationID)
 			s.failMatchAfterAllocationError(match.MatchID, "assignment_id_generation_failed")
-			return nil, err
+			return nil, fmt.Errorf("generate assignment id: %w", err)
 		}
+		assignmentID := "assignment_" + id.String()
 		token, err := s.tokens.Generate(connecttoken.Claims{
 			AssignmentID: assignmentID,
 			MatchID:      match.MatchID,
@@ -993,9 +996,9 @@ func copyMatch(match *Match) Match {
 		return Match{}
 	}
 	copied := *match
-	copied.PlayerIDs = append([]string(nil), match.PlayerIDs...)
-	copied.TicketIDs = append([]string(nil), match.TicketIDs...)
-	copied.AssignmentIDs = append([]string(nil), match.AssignmentIDs...)
+	copied.PlayerIDs = slices.Clone(match.PlayerIDs)
+	copied.TicketIDs = slices.Clone(match.TicketIDs)
+	copied.AssignmentIDs = slices.Clone(match.AssignmentIDs)
 	return copied
 }
 
@@ -1004,12 +1007,4 @@ func copyAssignment(assignment *Assignment) Assignment {
 		return Assignment{}
 	}
 	return *assignment
-}
-
-func randomID(prefix string) (string, error) {
-	var bytes [16]byte
-	if _, err := rand.Read(bytes[:]); err != nil {
-		return "", fmt.Errorf("generate %s id: %w", prefix, err)
-	}
-	return prefix + "_" + hex.EncodeToString(bytes[:]), nil
 }
