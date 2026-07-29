@@ -87,6 +87,21 @@ func (r *Registry) Get(ctx context.Context, roomID string) (*Runtime, error) {
 	return room, nil
 }
 
+func (r *Registry) ResolveInviteCode(ctx context.Context, inviteCode string) (string, *Runtime, error) {
+	if err := validateInviteCode(inviteCode); err != nil {
+		return "", nil, err
+	}
+	route, err := r.store.RouteByInviteCode(ctx, inviteCode)
+	if err != nil {
+		return "", nil, err
+	}
+	room, err := r.Get(ctx, route.RoomID)
+	if err != nil {
+		return "", nil, err
+	}
+	return route.RoomID, room, nil
+}
+
 func (r *Registry) Close()         { r.cancel() }
 func (r *Registry) RoomCount() int { r.mu.Lock(); defer r.mu.Unlock(); return len(r.rooms) }
 

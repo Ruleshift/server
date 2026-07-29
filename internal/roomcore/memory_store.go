@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/Ruleshift/server/internal/module"
 )
@@ -31,6 +32,13 @@ func (s *MemoryStore) Create(ctx context.Context, state State, event Event, snap
 	defer s.mu.Unlock()
 	if _, exists := s.rooms[state.Route.RoomID]; exists {
 		return ErrRoomExists
+	}
+	if state.Route.InviteCode != "" {
+		for _, room := range s.rooms {
+			if room.route.InviteCode == state.Route.InviteCode {
+				return ErrInviteCodeExists
+			}
+		}
 	}
 	s.next++
 	event.Sequence = s.next
@@ -114,6 +122,21 @@ func (s *MemoryStore) Route(ctx context.Context, roomID string) (Route, error) {
 		return Route{}, ErrRoomNotFound
 	}
 	return room.route, nil
+}
+
+func (s *MemoryStore) RouteByInviteCode(ctx context.Context, inviteCode string) (Route, error) {
+	if err := ctx.Err(); err != nil {
+		return Route{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	for _, room := range s.rooms {
+		if room.route.InviteCode == inviteCode && room.route.InviteDeadline.After(now) {
+			return room.route, nil
+		}
+	}
+	return Route{}, ErrInviteCodeNotFound
 }
 
 func cloneOpaque(value module.OpaqueState) module.OpaqueState {

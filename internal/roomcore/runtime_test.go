@@ -113,3 +113,27 @@ func TestRegistryNeverCreatesRoomOnGet(t *testing.T) {
 		t.Fatalf("Get missing room = %v", err)
 	}
 }
+
+func TestRegistryResolvesOnlyActiveInviteCode(t *testing.T) {
+	store := NewMemoryStore()
+	registry, err := NewRegistry(store, module.ResolverFunc(func(context.Context, module.ModuleRef) (module.Runtime, error) { return &fakeRuntime{}, nil }), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+	route := testRoute()
+	route.InviteCode = "ABC123"
+	if _, err = registry.Create(context.Background(), route); err != nil {
+		t.Fatal(err)
+	}
+	roomID, room, err := registry.ResolveInviteCode(context.Background(), route.InviteCode)
+	if err != nil || room == nil || roomID != route.RoomID {
+		t.Fatalf("ResolveInviteCode active room = %q/%v/%v", roomID, room, err)
+	}
+	store.mu.Lock()
+	store.rooms[route.RoomID].route.InviteDeadline = time.Now().UTC().Add(-time.Second)
+	store.mu.Unlock()
+	if _, _, err = registry.ResolveInviteCode(context.Background(), route.InviteCode); !errors.Is(err, ErrInviteCodeNotFound) {
+		t.Fatalf("ResolveInviteCode expired room = %v, want ErrInviteCodeNotFound", err)
+	}
+}

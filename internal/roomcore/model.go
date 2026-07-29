@@ -11,12 +11,13 @@ import (
 )
 
 var (
-	ErrRoomNotFound     = errors.New("room not found")
-	ErrRoomExists       = errors.New("room already exists")
-	ErrInviteCodeExists = errors.New("room invite code already exists")
-	ErrRevisionMismatch = errors.New("expected revision does not match room revision")
-	ErrRuntimeClosed    = errors.New("room runtime is closed")
-	ErrQueueFull        = errors.New("room input queue is full")
+	ErrRoomNotFound       = errors.New("room not found")
+	ErrRoomExists         = errors.New("room already exists")
+	ErrInviteCodeExists   = errors.New("room invite code already exists")
+	ErrInviteCodeNotFound = errors.New("room invite code not found or expired")
+	ErrRevisionMismatch   = errors.New("expected revision does not match room revision")
+	ErrRuntimeClosed      = errors.New("room runtime is closed")
+	ErrQueueFull          = errors.New("room input queue is full")
 )
 
 const (
@@ -80,6 +81,7 @@ type Store interface {
 	Commit(context.Context, State, Event, *Snapshot) error
 	SaveSnapshot(context.Context, Snapshot) error
 	Route(context.Context, string) (Route, error)
+	RouteByInviteCode(context.Context, string) (Route, error)
 }
 
 type Command struct {

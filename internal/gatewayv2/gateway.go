@@ -143,6 +143,9 @@ func (g *Gateway) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 			if errors.Is(handleErr, roomcore.ErrRoomNotFound) {
 				code = "room_not_found"
 			}
+			if errors.Is(handleErr, roomcore.ErrInviteCodeNotFound) {
+				code = "invite_not_found"
+			}
 			if errors.Is(handleErr, module.ErrUnavailable) {
 				code = "module_unavailable"
 			}
@@ -181,10 +184,10 @@ func (g *Gateway) handle(ctx context.Context, state *connection, env *ruleshiftv
 	}
 }
 func (g *Gateway) join(ctx context.Context, state *connection, request *ruleshiftv2.JoinRoomRequest) error {
-	if request == nil || request.RoomId == "" {
-		return fmt.Errorf("room_id is required")
+	if request == nil || request.InviteCode == "" {
+		return fmt.Errorf("invite_code is required")
 	}
-	runtime, err := g.rooms.Get(ctx, request.RoomId)
+	roomID, runtime, err := g.rooms.ResolveInviteCode(ctx, request.InviteCode)
 	if err != nil {
 		return err
 	}
@@ -203,13 +206,13 @@ func (g *Gateway) join(ctx context.Context, state *connection, request *ruleshif
 		return err
 	}
 	state.room = runtime
-	state.roomID = request.RoomId
+	state.roomID = roomID
 	state.viewer = viewer
-	g.add(request.RoomId, state.session, viewer)
-	if err = state.session.Send(ctx, joinOK(request.RoomId, snapshot.Revision, viewer, snapshot.Module)); err != nil {
+	g.add(roomID, state.session, viewer)
+	if err = state.session.Send(ctx, joinOK(roomID, snapshot.Revision, viewer, snapshot.Module)); err != nil {
 		return err
 	}
-	return g.broadcastSnapshots(ctx, request.RoomId, runtime)
+	return g.broadcastSnapshots(ctx, roomID, runtime)
 }
 func (g *Gateway) apply(ctx context.Context, state *connection, request *ruleshiftv2.GameCommand) error {
 	started := time.Now()
