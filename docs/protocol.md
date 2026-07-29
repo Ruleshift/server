@@ -11,8 +11,10 @@ length prefix. `protocol_version` must equal `2`; v1 is rejected.
 The sequence is:
 
 1. `AuthRequest` must be the first envelope.
-2. `JoinRoomRequest` references a room created earlier through `POST /v2/rooms`.
-3. The server sends a recipient-specific `StateSnapshot`.
+2. `JoinRoomRequest.invite_code` contains the six-character code returned by
+   `POST /v2/rooms`; the server resolves a non-expired code to its internal room ID.
+3. `JoinRoomOk.room_id` returns that internal ID and the server sends a
+   recipient-specific `StateSnapshot`.
 4. The player sends `GameCommand` with authenticated intent in `Any`.
 5. The server serializes the command through the room queue and broadcasts
    recipient-specific `StateDelta` messages in revision order.

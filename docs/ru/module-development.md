@@ -356,7 +356,7 @@ Player WebSocket endpoint: `/v2/ws`. Все frames — binary protobuf
 `ruleshift.v2.ClientEnvelope`/`ServerEnvelope`.
 
 1. отправьте `AuthRequest` с `protocol_version = 2`;
-2. отправьте `JoinRoomRequest` с заранее созданным `room_id`;
+2. отправьте `JoinRoomRequest` с `invite_code` из ответа создания комнаты;
 3. упакуйте generated module command в `google.protobuf.Any`;
 4. отправьте `GameCommand` с `expected_revision`;
 5. распаковывайте snapshot/delta по type URL descriptor модуля.

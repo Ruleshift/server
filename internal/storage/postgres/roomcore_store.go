@@ -198,6 +198,18 @@ func (s *RoomCoreStore) Route(ctx context.Context, roomID string) (roomcore.Rout
 	return value, err
 }
 
+func (s *RoomCoreStore) RouteByInviteCode(ctx context.Context, inviteCode string) (roomcore.Route, error) {
+	var roomID string
+	err := s.platform.control.QueryRowContext(ctx, `SELECT room_id FROM room_invite_codes WHERE code=$1 AND deadline>CURRENT_TIMESTAMP`, inviteCode).Scan(&roomID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return roomcore.Route{}, roomcore.ErrInviteCodeNotFound
+	}
+	if err != nil {
+		return roomcore.Route{}, fmt.Errorf("resolve room invite code: %w", err)
+	}
+	return s.Route(ctx, roomID)
+}
+
 func (s *RoomCoreStore) moduleDB(ctx context.Context, name string) (*sql.DB, error) {
 	url, err := databaseURL(s.platform.controlURL, name)
 	if err != nil {

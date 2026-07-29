@@ -61,7 +61,7 @@ message ModuleRef {
 }
 
 message JoinRoomRequest {
-  string room_id = 1;
+  string invite_code = 1;
   uint64 last_seen_revision = 2;
   JoinMode join_mode = 3;
 }
