@@ -8,7 +8,7 @@ import (
 
 	"github.com/Ruleshift/server/internal/controlplane"
 	"github.com/Ruleshift/server/internal/module"
-	modulev1 "github.com/Ruleshift/server/internal/moduleruntime/generated/moduleruntimev1"
+	modulev2 "github.com/Ruleshift/server/internal/moduleruntime/generated/moduleruntimev2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -16,19 +16,19 @@ import (
 )
 
 type delayedModuleServer struct {
-	modulev1.UnimplementedModuleRuntimeServer
+	modulev2.UnimplementedModuleRuntimeServer
 	token string
 }
 
-func (s delayedModuleServer) Describe(ctx context.Context, _ *modulev1.DescribeRequest) (*modulev1.DescribeResponse, error) {
+func (s delayedModuleServer) Describe(ctx context.Context, _ *modulev2.DescribeRequest) (*modulev2.DescribeResponse, error) {
 	values := metadata.ValueFromIncomingContext(ctx, "authorization")
 	if len(values) != 1 || values[0] != "Bearer "+s.token {
 		return nil, status.Error(codes.Unauthenticated, "invalid module RPC token")
 	}
-	return &modulev1.DescribeResponse{
+	return &modulev2.DescribeResponse{
 		ModuleId:        "sample",
 		Version:         "1.0.0",
-		AbiVersion:      1,
+		AbiVersion:      2,
 		StateTypeUrl:    "type.googleapis.com/example.State",
 		CommandTypeUrls: []string{"type.googleapis.com/example.Command"},
 	}, nil
@@ -52,7 +52,7 @@ func TestConnectorWaitsForModuleServiceToBecomeReachable(t *testing.T) {
 			return
 		}
 		server := grpc.NewServer()
-		modulev1.RegisterModuleRuntimeServer(server, delayedModuleServer{token: "secret"})
+		modulev2.RegisterModuleRuntimeServer(server, delayedModuleServer{token: "secret"})
 		serverReady <- server
 		_ = server.Serve(listener)
 	}()

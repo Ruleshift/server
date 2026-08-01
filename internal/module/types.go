@@ -13,12 +13,13 @@ import (
 )
 
 const (
-	ABIVersion            uint32 = 1
+	ABIVersion            uint32 = 2
 	MaxStateBytes                = 1 << 20
 	MaxMessageBytes              = 256 << 10
 	DefaultDeadline              = 50 * time.Millisecond
-	NewStateDeadline             = 250 * time.Millisecond
+	CreateStateDeadline          = 250 * time.Millisecond
 	MaxTransitionDeadline        = 250 * time.Millisecond
+	MaxPlayers            uint32 = 64
 )
 
 var (
@@ -79,13 +80,6 @@ func (s OpaqueState) Any() *anypb.Any {
 	return &anypb.Any{TypeUrl: s.TypeURL, Value: append([]byte(nil), s.Payload...)}
 }
 
-type JoinMode uint8
-
-const (
-	JoinModePlayer JoinMode = iota + 1
-	JoinModeSpectator
-)
-
 type ViewScope uint8
 
 const (
@@ -95,17 +89,25 @@ const (
 )
 
 type Viewer struct {
-	PlayerID string
-	JoinMode JoinMode
-	Scope    ViewScope
+	PlayerID  string
+	SeatIndex uint32
+	Seated    bool
+	Scope     ViewScope
 }
 
-type Operation struct {
-	OperationID string
-	RoomID      string
-	Revision    uint64
-	Now         time.Time
-	Seed        uint64
+type Actor struct {
+	PlayerID  string
+	SeatIndex uint32
+}
+
+type GameSetup struct {
+	PlayerCount uint32
+}
+
+type DeterministicContext struct {
+	Revision uint64
+	Now      time.Time
+	Seed     uint64
 }
 
 type Transition struct {
@@ -120,12 +122,10 @@ type Projection struct {
 }
 
 type Runtime interface {
-	NewState(context.Context, Operation) (Transition, error)
-	PlayerJoined(context.Context, Operation, OpaqueState, string) (Transition, error)
-	PlayerLeft(context.Context, Operation, OpaqueState, string) (Transition, error)
-	Apply(context.Context, Operation, OpaqueState, string, OpaqueState) (Transition, error)
-	ProjectSnapshot(context.Context, Operation, OpaqueState, Viewer) (Projection, error)
-	ProjectDelta(context.Context, Operation, OpaqueState, OpaqueState, OpaqueState, Viewer) (Projection, error)
+	CreateState(context.Context, DeterministicContext, GameSetup) (Transition, error)
+	Apply(context.Context, DeterministicContext, OpaqueState, Actor, OpaqueState) (Transition, error)
+	ProjectSnapshot(context.Context, DeterministicContext, OpaqueState, Viewer) (Projection, error)
+	ProjectDelta(context.Context, DeterministicContext, OpaqueState, OpaqueState, OpaqueState, Viewer) (Projection, error)
 }
 
 type Resolver interface {

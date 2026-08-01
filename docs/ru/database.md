@@ -10,15 +10,19 @@ database для каждой пары developer/module.
 - `modules` и текущая active version;
 - immutable `module_versions` с OCI- и descriptor-digests;
 - ограниченные `module_validation_runs`;
-- `room_routes`, закреплённые за developer/module/version/image digest.
+- `room_routes`, закреплённые за developer/module/version/image digest и
+  неизменяемым `player_count`;
 - уникальные шестисимвольные `room_invite_codes` с deadline 24 часа.
 
 Registry username, password и token здесь никогда не сохраняются.
 
 ## Module database
 
-- `rooms`: revision, lifecycle, seed, opaque protobuf state и SHA-256 digest;
-- `room_events`: generic lifecycle/command event, protobuf input/delta bytes,
+- `rooms`: revision, статус lobby/active, требуемое число игроков, seed, opaque
+  protobuf state и SHA-256 digest;
+- `room_participants`: устойчивое соответствие аутентифицированного игрока
+  месту, отдельное от protobuf-состояния модуля;
+- `room_events`: generic command event, protobuf input/delta bytes,
   диапазон ревизий и digest итогового состояния;
 - `room_snapshots`: opaque protobuf state каждые 100 ревизий и при eviction;
 - additive developer tables, объявленные в manifest версии.

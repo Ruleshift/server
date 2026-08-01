@@ -11,7 +11,11 @@ import (
 	"github.com/Ruleshift/server/internal/module"
 )
 
-type fakeRuntime struct{ calls int }
+type fakeRuntime struct {
+	calls int
+	setup module.GameSetup
+	actor module.Actor
+}
 
 func opaque(t *testing.T, typeURL, value string, limit int) module.OpaqueState {
 	t.Helper()
@@ -26,35 +30,31 @@ func transition(value string) (module.Transition, error) {
 	delta, _ := module.NewOpaque("example.Delta", []byte("delta:"+value), module.MaxMessageBytes)
 	return module.Transition{Changed: true, NextState: state, Delta: delta}, nil
 }
-func (f *fakeRuntime) NewState(_ context.Context, op module.Operation) (module.Transition, error) {
-	if op.OperationID == "" {
-		return module.Transition{}, errors.New("missing operation")
+func (f *fakeRuntime) CreateState(_ context.Context, _ module.DeterministicContext, setup module.GameSetup) (module.Transition, error) {
+	if setup.PlayerCount == 0 {
+		return module.Transition{}, errors.New("missing player count")
 	}
+	f.setup = setup
 	return transition("0")
 }
-func (f *fakeRuntime) PlayerJoined(_ context.Context, _ module.Operation, state module.OpaqueState, player string) (module.Transition, error) {
-	return transition(string(state.Payload) + "+" + player)
-}
-func (f *fakeRuntime) PlayerLeft(_ context.Context, _ module.Operation, state module.OpaqueState, player string) (module.Transition, error) {
-	return transition(string(state.Payload) + "-" + player)
-}
-func (f *fakeRuntime) Apply(_ context.Context, _ module.Operation, state module.OpaqueState, _ string, command module.OpaqueState) (module.Transition, error) {
+func (f *fakeRuntime) Apply(_ context.Context, _ module.DeterministicContext, state module.OpaqueState, actor module.Actor, command module.OpaqueState) (module.Transition, error) {
 	f.calls++
+	f.actor = actor
 	if string(command.Payload) == "fail" {
 		return module.Transition{}, module.ErrUnavailable
 	}
 	return transition(fmt.Sprintf("%s:%s", state.Payload, command.Payload))
 }
-func (f *fakeRuntime) ProjectSnapshot(_ context.Context, _ module.Operation, state module.OpaqueState, _ module.Viewer) (module.Projection, error) {
+func (f *fakeRuntime) ProjectSnapshot(_ context.Context, _ module.DeterministicContext, state module.OpaqueState, _ module.Viewer) (module.Projection, error) {
 	view, _ := module.NewOpaque("example.View", state.Payload, module.MaxMessageBytes)
 	return module.Projection{Payload: view}, nil
 }
-func (f *fakeRuntime) ProjectDelta(_ context.Context, _ module.Operation, _, after, delta module.OpaqueState, _ module.Viewer) (module.Projection, error) {
+func (f *fakeRuntime) ProjectDelta(_ context.Context, _ module.DeterministicContext, _, after, delta module.OpaqueState, _ module.Viewer) (module.Projection, error) {
 	view, _ := module.NewOpaque("example.View", append(append([]byte(nil), after.Payload...), delta.Payload...), module.MaxMessageBytes)
 	return module.Projection{Payload: view}, nil
 }
 func testRoute() Route {
-	return Route{RoomID: "room-1", Module: module.ModuleRef{DeveloperID: "dev", ModuleID: "counter", Version: "1.0.0", ImageDigest: "sha256:" + strings.Repeat("0", 64)}, ModuleDatabase: "dev_counter", Seed: 7}
+	return Route{RoomID: "room-1", Module: module.ModuleRef{DeveloperID: "dev", ModuleID: "counter", Version: "1.0.0", ImageDigest: "sha256:" + strings.Repeat("0", 64)}, ModuleDatabase: "dev_counter", PlayerCount: 1, Seed: 7}
 }
 
 func TestModuleFailureDoesNotChangeRevisionAndReplayUsesPinnedVersion(t *testing.T) {
@@ -67,6 +67,9 @@ func TestModuleFailureDoesNotChangeRevisionAndReplayUsesPinnedVersion(t *testing
 		t.Fatal(err)
 	}
 	go runtime.Run(ctx)
+	if _, _, err = runtime.Join(ctx, "p1", false, module.ViewScopePlayer); err != nil {
+		t.Fatal(err)
+	}
 	command := Command{PlayerID: "p1", Payload: opaque(t, "example.Command", "fail", module.MaxMessageBytes)}
 	if _, err = runtime.Apply(ctx, command, nil); !errors.Is(err, module.ErrUnavailable) {
 		t.Fatalf("expected unavailable, got %v", err)
@@ -135,5 +138,85 @@ func TestRegistryResolvesOnlyActiveInviteCode(t *testing.T) {
 	store.mu.Unlock()
 	if _, _, err = registry.ResolveInviteCode(context.Background(), route.InviteCode); !errors.Is(err, ErrInviteCodeNotFound) {
 		t.Fatalf("ResolveInviteCode expired room = %v, want ErrInviteCodeNotFound", err)
+	}
+}
+
+func TestCoreOwnsLobbySeatsAndModuleReceivesAuthenticatedActor(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := NewMemoryStore()
+	implementation := &fakeRuntime{}
+	route := testRoute()
+	route.PlayerCount = 2
+	runtime, err := Create(ctx, route, RuntimeConfig{QueueSize: 4, Store: store, Module: implementation})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if implementation.setup.PlayerCount != 2 {
+		t.Fatalf("CreateState setup player_count = %d, want 2", implementation.setup.PlayerCount)
+	}
+	go runtime.Run(ctx)
+
+	command := Command{PlayerID: "p1", Payload: opaque(t, "example.Command", "before-ready", module.MaxMessageBytes)}
+	if _, err = runtime.Apply(ctx, command, nil); !errors.Is(err, ErrMatchNotReady) {
+		t.Fatalf("Apply before seats filled = %v, want ErrMatchNotReady", err)
+	}
+	if implementation.calls != 0 {
+		t.Fatalf("module Apply calls before match ready = %d, want 0", implementation.calls)
+	}
+
+	firstSnapshot, firstViewer, err := runtime.Join(ctx, "p1", false, module.ViewScopePlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !firstViewer.Seated || firstViewer.SeatIndex != 0 || firstSnapshot.Status != StatusLobby {
+		t.Fatalf("first join snapshot=%+v viewer=%+v", firstSnapshot, firstViewer)
+	}
+	if _, err = runtime.Leave(ctx, firstViewer); err != nil {
+		t.Fatal(err)
+	}
+
+	_, secondViewer, err := runtime.Join(ctx, "p2", false, module.ViewScopePlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondViewer.SeatIndex != 0 {
+		t.Fatalf("reused lobby seat = %d, want 0", secondViewer.SeatIndex)
+	}
+	activeSnapshot, firstViewer, err := runtime.Join(ctx, "p1", false, module.ViewScopePlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstViewer.SeatIndex != 1 || activeSnapshot.Status != StatusActive {
+		t.Fatalf("active join snapshot=%+v viewer=%+v", activeSnapshot, firstViewer)
+	}
+
+	if _, err = runtime.Leave(ctx, secondViewer); err != nil {
+		t.Fatal(err)
+	}
+	reconnectedSnapshot, reconnectedViewer, err := runtime.Join(ctx, "p2", false, module.ViewScopePlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconnectedViewer.SeatIndex != 0 || reconnectedSnapshot.Status != StatusActive {
+		t.Fatalf("reconnect snapshot=%+v viewer=%+v", reconnectedSnapshot, reconnectedViewer)
+	}
+	if _, _, err = runtime.Join(ctx, "p3", false, module.ViewScopePlayer); !errors.Is(err, ErrRoomFull) {
+		t.Fatalf("third player join = %v, want ErrRoomFull", err)
+	}
+
+	command = Command{PlayerID: "p1", Payload: opaque(t, "example.Command", "after-ready", module.MaxMessageBytes)}
+	if _, err = runtime.Apply(ctx, command, nil); err != nil {
+		t.Fatal(err)
+	}
+	if implementation.actor.PlayerID != "p1" || implementation.actor.SeatIndex != 1 {
+		t.Fatalf("module actor = %+v, want authenticated p1 at seat 1", implementation.actor)
+	}
+	state, err := runtime.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Revision != 1 || state.Status != StatusActive || len(state.Participants) != 2 {
+		t.Fatalf("state after command = %+v", state)
 	}
 }

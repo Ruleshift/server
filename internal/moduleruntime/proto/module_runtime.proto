@@ -1,26 +1,18 @@
 syntax = "proto3";
 
-package ruleshift.module.v1;
+package ruleshift.module.v2;
 
 import "google/protobuf/any.proto";
 
-option go_package = "github.com/Ruleshift/server/internal/moduleruntime/generated/moduleruntimev1;moduleruntimev1";
-option csharp_namespace = "Ruleshift.Module.V1";
+option go_package = "github.com/Ruleshift/server/internal/moduleruntime/generated/moduleruntimev2;moduleruntimev2";
+option csharp_namespace = "Ruleshift.Module.V2";
 
 service ModuleRuntime {
   rpc Describe(DescribeRequest) returns (DescribeResponse);
-  rpc NewState(NewStateRequest) returns (TransitionResponse);
-  rpc PlayerJoined(PlayerTransitionRequest) returns (TransitionResponse);
-  rpc PlayerLeft(PlayerTransitionRequest) returns (TransitionResponse);
+  rpc CreateState(CreateStateRequest) returns (TransitionResponse);
   rpc Apply(ApplyRequest) returns (TransitionResponse);
   rpc ProjectSnapshot(ProjectRequest) returns (ProjectionResponse);
   rpc ProjectDelta(ProjectDeltaRequest) returns (ProjectionResponse);
-}
-
-enum JoinMode {
-  JOIN_MODE_UNSPECIFIED = 0;
-  JOIN_MODE_PLAYER = 1;
-  JOIN_MODE_SPECTATOR = 2;
 }
 
 enum ViewScope {
@@ -30,18 +22,32 @@ enum ViewScope {
   VIEW_SCOPE_FULL = 3;
 }
 
-message Viewer {
-  string player_id = 1;
-  JoinMode join_mode = 2;
-  ViewScope scope = 3;
+// DeterministicContext contains only authoritative values that may affect game
+// rules. Connection, room-membership, and operation-tracing data are excluded.
+message DeterministicContext {
+  uint64 revision = 1;
+  int64 now_unix_ms = 2;
+  uint64 seed = 3;
 }
 
-message RoomContext {
-  string operation_id = 1;
-  string room_id = 2;
-  uint64 revision = 3;
-  int64 now_unix_ms = 4;
-  uint64 seed = 5;
+// GameSetup is immutable for a room. Players are assigned to these zero-based
+// seats by Ruleshift Core; the module does not process joins or connections.
+message GameSetup {
+  uint32 player_count = 1;
+}
+
+// Actor is supplied by Ruleshift after authentication and seat resolution.
+// It is never accepted from the client command payload.
+message Actor {
+  string player_id = 1;
+  uint32 seat_index = 2;
+}
+
+// Viewer is resolved by Ruleshift. Spectators have no seat_index.
+message Viewer {
+  string player_id = 1;
+  optional uint32 seat_index = 2;
+  ViewScope scope = 3;
 }
 
 message DescribeRequest {}
@@ -53,21 +59,17 @@ message DescribeResponse {
   string state_type_url = 4;
   repeated string command_type_urls = 5;
   bytes descriptor_set_sha256 = 6;
-  bool supports_player_left = 7;
 }
 
-message NewStateRequest { RoomContext context = 1; }
-
-message PlayerTransitionRequest {
-  RoomContext context = 1;
-  google.protobuf.Any state = 2;
-  string player_id = 3;
+message CreateStateRequest {
+  DeterministicContext context = 1;
+  GameSetup setup = 2;
 }
 
 message ApplyRequest {
-  RoomContext context = 1;
+  DeterministicContext context = 1;
   google.protobuf.Any state = 2;
-  string player_id = 3;
+  Actor actor = 3;
   google.protobuf.Any command = 4;
 }
 
@@ -78,13 +80,13 @@ message TransitionResponse {
 }
 
 message ProjectRequest {
-  RoomContext context = 1;
+  DeterministicContext context = 1;
   google.protobuf.Any state = 2;
   Viewer viewer = 3;
 }
 
 message ProjectDeltaRequest {
-  RoomContext context = 1;
+  DeterministicContext context = 1;
   google.protobuf.Any before_state = 2;
   google.protobuf.Any after_state = 3;
   google.protobuf.Any delta = 4;

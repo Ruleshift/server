@@ -26,23 +26,32 @@ pinned module/version, while state, command and delta use `google.protobuf.Any`.
 An error or timeout from a module produces `module_unavailable` or
 `command_rejected` and never changes room revision.
 
-## Module Runtime ABI v1
+## Module Runtime ABI v2
 
 Schema: `internal/moduleruntime/proto/module_runtime.proto`. It is ordinary gRPC
 on port 50051 inside the Kubernetes cluster. The service implements `Describe`,
-`NewState`, player lifecycle, `Apply`, and projection RPCs.
+`CreateState`, `Apply`, `ProjectSnapshot`, and `ProjectDelta`. ABI v2 has no
+room, lobby, join, leave, connection, or reconnect RPCs.
 
-Every request contains an `operation_id`; every transition is stateless and
-side-effect free. Ruleshift supplies authenticated `player_id`, server time,
-room revision and deterministic room seed. The module returns opaque protobuf
-bytes; Ruleshift owns persistence and revision ordering.
+The module process owns no current matches. Ruleshift stores the opaque
+canonical state in the room and passes it into every transition/projection.
+`CreateState` receives only immutable `GameSetup.player_count`. Core owns the
+persistent authenticated `player_id <-> seat_index` mapping, blocks commands
+until all required seats are filled, frees seats on disconnect while the room
+is still in `lobby`, and retains seats after it becomes `active`.
+
+`Apply` receives the authenticated `Actor { player_id, seat_index }` separately
+from the client-defined command. Projections receive a resolved `Viewer` with
+an optional seat and player/public/full scope. The deterministic context
+contains only revision, server time and room seed. The module returns opaque
+protobuf bytes; Ruleshift owns state persistence and revision ordering.
 
 Limits:
 
 - state: 1 MiB;
 - command, delta, view: 256 KiB;
 - transition deadline: 50 ms by default, never above 250 ms;
-- `NewState`: at most 250 ms;
+- `CreateState`: at most 250 ms;
 - one retry only for `Unavailable` within the original deadline.
 
 Module traffic uses a random per-deployment bearer token stored in Kubernetes
@@ -54,5 +63,5 @@ Secret. Player and developer credentials are never forwarded to module pods.
 ./scripts/proto.ps1
 ```
 
-Generated Go packages are `ruleshiftv2` and `moduleruntimev1`. Module authors
+Generated Go packages are `ruleshiftv2` and `moduleruntimev2`. Module authors
 generate ABI bindings and their own game proto bindings in their own repository.

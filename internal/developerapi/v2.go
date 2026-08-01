@@ -23,7 +23,7 @@ type APIKeyAuthenticator interface {
 }
 
 type RoomService interface {
-	CreateRoom(context.Context, string, string, string) (roomcore.Route, error)
+	CreateRoom(context.Context, string, string, string, uint32) (roomcore.Route, error)
 	GetRoom(context.Context, string, string) (roomcore.Route, error)
 }
 
@@ -236,14 +236,15 @@ func (h *V2Handler) getValidation(w http.ResponseWriter, r *http.Request) {
 
 func (h *V2Handler) createRoom(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		ModuleID string `json:"module_id"`
-		Version  string `json:"version,omitempty"`
+		ModuleID    string `json:"module_id"`
+		Version     string `json:"version,omitempty"`
+		PlayerCount uint32 `json:"player_count,omitempty"`
 	}
 	if err := decodeJSON(w, r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	route, err := h.rooms.CreateRoom(r.Context(), developerID(r), request.ModuleID, request.Version)
+	route, err := h.rooms.CreateRoom(r.Context(), developerID(r), request.ModuleID, request.Version, request.PlayerCount)
 	if err != nil {
 		writeError(w, http.StatusConflict, "room_create_failed", err.Error())
 		return

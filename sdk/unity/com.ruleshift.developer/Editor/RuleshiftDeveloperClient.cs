@@ -205,7 +205,9 @@ namespace Ruleshift.Developer
     {
         [JsonProperty("module_id")] public string ModuleId { get; set; }
         [JsonProperty("version")] public string Version { get; set; }
-        [JsonProperty("abi_version")] public uint AbiVersion { get; set; } = 1;
+        [JsonProperty("abi_version")] public uint AbiVersion { get; set; } = 2;
+        [JsonProperty("min_players")] public uint MinPlayers { get; set; }
+        [JsonProperty("max_players")] public uint MaxPlayers { get; set; }
         [JsonProperty("state_type_url")] public string StateTypeUrl { get; set; }
         [JsonProperty("command_type_urls")] public List<string> CommandTypeUrls { get; set; } = new List<string>();
         [JsonProperty("transition_deadline_ms")] public int TransitionDeadlineMs { get; set; }
@@ -239,6 +241,7 @@ namespace Ruleshift.Developer
         [JsonProperty("developer_id")] public string DeveloperId { get; set; }
         [JsonProperty("module_id")] public string ModuleId { get; set; }
         [JsonProperty("version")] public string Version { get; set; }
+        [JsonProperty("player_count")] public uint PlayerCount { get; set; }
         [JsonProperty("image_digest")] public string ImageDigest { get; set; }
     }
 
@@ -278,6 +281,7 @@ namespace Ruleshift.Developer
         [JsonProperty("room_id")] public string RoomId { get; set; }
         [JsonProperty("module")] public ModuleReferenceInfo Module { get; set; }
         [JsonProperty("module_database")] public string ModuleDatabase { get; set; }
+        [JsonProperty("player_count")] public uint PlayerCount { get; set; }
         [JsonProperty("seed")] public ulong Seed { get; set; }
         [JsonProperty("created_at")] public DateTime CreatedAt { get; set; }
         [JsonProperty("invite_code")] public string InviteCode { get; set; }

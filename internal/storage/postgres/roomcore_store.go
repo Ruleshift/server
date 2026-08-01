@@ -23,7 +23,7 @@ func (s *RoomCoreStore) Create(ctx context.Context, state roomcore.State, event 
 		return fmt.Errorf("begin room route transaction: %w", err)
 	}
 	defer controlTx.Rollback()
-	_, err = controlTx.ExecContext(ctx, `INSERT INTO room_routes(room_id,developer_id,module_id,module_version,image_digest,module_database,seed,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, r.RoomID, r.Module.DeveloperID, r.Module.ModuleID, r.Module.Version, r.Module.ImageDigest, r.ModuleDatabase, strconv.FormatUint(r.Seed, 10), r.CreatedAt)
+	_, err = controlTx.ExecContext(ctx, `INSERT INTO room_routes(room_id,developer_id,module_id,module_version,image_digest,module_database,seed,player_count,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, r.RoomID, r.Module.DeveloperID, r.Module.ModuleID, r.Module.Version, r.Module.ImageDigest, r.ModuleDatabase, strconv.FormatUint(r.Seed, 10), r.PlayerCount, r.CreatedAt)
 	if isUniqueViolation(err) {
 		return roomcore.ErrRoomExists
 	}
@@ -52,7 +52,7 @@ func (s *RoomCoreStore) Create(ctx context.Context, state roomcore.State, event 
 	}
 	defer tx.Rollback()
 	versionID := r.Module.DeveloperID + ":" + r.Module.ModuleID + ":" + r.Module.Version + ":" + r.Module.ImageDigest
-	_, err = tx.ExecContext(ctx, `INSERT INTO rooms(id,module_version_id,revision,lifecycle_status,seed,state_type_url,state_payload,state_digest,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)`, r.RoomID, versionID, "0", state.Status, strconv.FormatUint(r.Seed, 10), state.Opaque.TypeURL, state.Opaque.Payload, state.Opaque.Digest[:], state.CreatedAt)
+	_, err = tx.ExecContext(ctx, `INSERT INTO rooms(id,module_version_id,revision,lifecycle_status,seed,required_players,state_type_url,state_payload,state_digest,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)`, r.RoomID, versionID, "0", state.Status, strconv.FormatUint(r.Seed, 10), r.PlayerCount, state.Opaque.TypeURL, state.Opaque.Payload, state.Opaque.Digest[:], state.CreatedAt)
 	if err == nil {
 		err = insertOpaqueEvent(ctx, tx, event)
 	}
@@ -162,6 +162,73 @@ func (s *RoomCoreStore) Commit(ctx context.Context, state roomcore.State, event 
 	return tx.Commit()
 }
 
+func (s *RoomCoreStore) LoadMembership(ctx context.Context, roomID string) (string, []roomcore.Participant, error) {
+	route, err := s.Route(ctx, roomID)
+	if err != nil {
+		return "", nil, err
+	}
+	db, err := s.moduleDB(ctx, route.ModuleDatabase)
+	if err != nil {
+		return "", nil, err
+	}
+	var status string
+	if err = db.QueryRowContext(ctx, `SELECT lifecycle_status FROM rooms WHERE id=$1`, roomID).Scan(&status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil, roomcore.ErrRoomNotFound
+		}
+		return "", nil, err
+	}
+	rows, err := db.QueryContext(ctx, `SELECT player_id,seat_index,joined_at FROM room_participants WHERE room_id=$1 ORDER BY seat_index`, roomID)
+	if err != nil {
+		return "", nil, err
+	}
+	defer rows.Close()
+	participants := make([]roomcore.Participant, 0, route.PlayerCount)
+	for rows.Next() {
+		var participant roomcore.Participant
+		if err = rows.Scan(&participant.PlayerID, &participant.SeatIndex, &participant.JoinedAt); err != nil {
+			return "", nil, err
+		}
+		participants = append(participants, participant)
+	}
+	if err = rows.Err(); err != nil {
+		return "", nil, err
+	}
+	return status, participants, nil
+}
+
+func (s *RoomCoreStore) SaveMembership(ctx context.Context, state roomcore.State) error {
+	if len(state.Participants) > int(state.Route.PlayerCount) {
+		return roomcore.ErrRoomFull
+	}
+	db, err := s.moduleDB(ctx, state.Route.ModuleDatabase)
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE rooms SET lifecycle_status=$2,updated_at=$3 WHERE id=$1`, state.Route.RoomID, state.Status, state.UpdatedAt)
+	if err != nil {
+		return err
+	}
+	rows, _ := result.RowsAffected()
+	if rows != 1 {
+		return roomcore.ErrRoomNotFound
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM room_participants WHERE room_id=$1`, state.Route.RoomID); err != nil {
+		return err
+	}
+	for _, participant := range state.Participants {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO room_participants(room_id,player_id,seat_index,joined_at) VALUES($1,$2,$3,$4)`, state.Route.RoomID, participant.PlayerID, participant.SeatIndex, participant.JoinedAt); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *RoomCoreStore) SaveSnapshot(ctx context.Context, value roomcore.Snapshot) error {
 	route, err := s.Route(ctx, value.RoomID)
 	if err != nil {
@@ -180,7 +247,7 @@ func (s *RoomCoreStore) Route(ctx context.Context, roomID string) (roomcore.Rout
 	var seed string
 	var inviteCode sql.NullString
 	var inviteDeadline sql.NullTime
-	err := s.platform.control.QueryRowContext(ctx, `SELECT r.developer_id,r.module_id,r.module_version,r.image_digest,r.module_database,r.seed::text,r.created_at,i.code,i.deadline FROM room_routes r LEFT JOIN room_invite_codes i ON i.room_id=r.room_id WHERE r.room_id=$1`, roomID).Scan(&value.Module.DeveloperID, &value.Module.ModuleID, &value.Module.Version, &value.Module.ImageDigest, &value.ModuleDatabase, &seed, &value.CreatedAt, &inviteCode, &inviteDeadline)
+	err := s.platform.control.QueryRowContext(ctx, `SELECT r.developer_id,r.module_id,r.module_version,r.image_digest,r.module_database,r.seed::text,r.player_count,r.created_at,i.code,i.deadline FROM room_routes r LEFT JOIN room_invite_codes i ON i.room_id=r.room_id WHERE r.room_id=$1`, roomID).Scan(&value.Module.DeveloperID, &value.Module.ModuleID, &value.Module.Version, &value.Module.ImageDigest, &value.ModuleDatabase, &seed, &value.PlayerCount, &value.CreatedAt, &inviteCode, &inviteDeadline)
 	if errors.Is(err, sql.ErrNoRows) {
 		return roomcore.Route{}, roomcore.ErrRoomNotFound
 	}

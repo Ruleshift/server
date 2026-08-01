@@ -13,7 +13,7 @@ import (
 	"os"
 	"strings"
 
-	modulev1 "github.com/Ruleshift/server/internal/moduleruntime/generated/moduleruntimev1"
+	modulev2 "github.com/Ruleshift/server/internal/moduleruntime/generated/moduleruntimev2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
@@ -25,48 +25,52 @@ import (
 )
 
 type state struct {
-	Players       []player `json:"players,omitempty"`
-	FEN           string   `json:"fen,omitempty"`
-	Side          string   `json:"side,omitempty"`
-	Status        string   `json:"status"`
-	LastMove      string   `json:"last_move,omitempty"`
-	CurrentPlayer string   `json:"current_player,omitempty"`
-	Deck          []string `json:"deck,omitempty"`
-	Discard       []string `json:"discard,omitempty"`
+	Players     []player `json:"players,omitempty"`
+	FEN         string   `json:"fen,omitempty"`
+	Side        string   `json:"side,omitempty"`
+	Status      string   `json:"status"`
+	LastMove    string   `json:"last_move,omitempty"`
+	CurrentSeat *uint32  `json:"current_seat,omitempty"`
+	Deck        []string `json:"deck,omitempty"`
+	Discard     []string `json:"discard,omitempty"`
 }
+
 type player struct {
-	ID     string   `json:"id"`
-	Secret *int64   `json:"secret,omitempty"`
-	Hand   []string `json:"hand,omitempty"`
+	SeatIndex uint32   `json:"seat_index"`
+	Secret    *int64   `json:"secret,omitempty"`
+	Hand      []string `json:"hand,omitempty"`
 }
+
 type command struct {
-	Kind           string `json:"kind"`
-	Value          int64  `json:"value,omitempty"`
-	Move           string `json:"move,omitempty"`
-	CardID         string `json:"card_id,omitempty"`
-	TargetPlayerID string `json:"target_player_id,omitempty"`
-	TargetCardID   string `json:"target_card_id,omitempty"`
+	Kind         string  `json:"kind"`
+	Value        int64   `json:"value,omitempty"`
+	Move         string  `json:"move,omitempty"`
+	CardID       string  `json:"card_id,omitempty"`
+	TargetSeat   *uint32 `json:"target_seat,omitempty"`
+	TargetCardID string  `json:"target_card_id,omitempty"`
 }
+
 type viewPlayer struct {
-	ID          string   `json:"id"`
+	SeatIndex   uint32   `json:"seat_index"`
 	HasSecret   bool     `json:"has_secret,omitempty"`
 	Secret      *int64   `json:"secret,omitempty"`
 	HandCount   int      `json:"hand_count,omitempty"`
 	PrivateHand []string `json:"private_hand,omitempty"`
 }
+
 type view struct {
-	Players       []viewPlayer `json:"players,omitempty"`
-	FEN           string       `json:"fen,omitempty"`
-	Side          string       `json:"side,omitempty"`
-	Status        string       `json:"status"`
-	LastMove      string       `json:"last_move,omitempty"`
-	CurrentPlayer string       `json:"current_player,omitempty"`
-	DeckCount     int          `json:"deck_count,omitempty"`
-	Discard       []string     `json:"discard,omitempty"`
+	Players     []viewPlayer `json:"players,omitempty"`
+	FEN         string       `json:"fen,omitempty"`
+	Side        string       `json:"side,omitempty"`
+	Status      string       `json:"status"`
+	LastMove    string       `json:"last_move,omitempty"`
+	CurrentSeat *uint32      `json:"current_seat,omitempty"`
+	DeckCount   int          `json:"deck_count,omitempty"`
+	Discard     []string     `json:"discard,omitempty"`
 }
 
 type server struct {
-	modulev1.UnimplementedModuleRuntimeServer
+	modulev2.UnimplementedModuleRuntimeServer
 	id, version, prefix, token string
 	descriptorDigest           []byte
 }
@@ -80,9 +84,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	service := &server{id: id, version: env("RULESHIFT_MODULE_VERSION", "1.0.0"), prefix: "type.googleapis.com/ruleshift.examples." + id + ".v1.", token: os.Getenv("RULESHIFT_MODULE_RPC_TOKEN"), descriptorDigest: descriptorSHA()}
+	service := &server{id: id, version: env("RULESHIFT_MODULE_VERSION", "2.0.0"), prefix: "type.googleapis.com/ruleshift.examples." + id + ".v1.", token: os.Getenv("RULESHIFT_MODULE_RPC_TOKEN"), descriptorDigest: descriptorSHA()}
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(service.authorize))
-	modulev1.RegisterModuleRuntimeServer(grpcServer, service)
+	modulev2.RegisterModuleRuntimeServer(grpcServer, service)
 	healthServer := health.NewServer()
 	healthServer.SetServingStatus("", healthv1.HealthCheckResponse_SERVING)
 	healthv1.RegisterHealthServer(grpcServer, healthServer)
@@ -104,58 +108,47 @@ func (s *server) authorize(ctx context.Context, request any, info *grpc.UnarySer
 	}
 	return handler(ctx, request)
 }
-func (s *server) Describe(context.Context, *modulev1.DescribeRequest) (*modulev1.DescribeResponse, error) {
-	return &modulev1.DescribeResponse{ModuleId: s.id, Version: s.version, AbiVersion: 1, StateTypeUrl: s.prefix + "State", CommandTypeUrls: []string{s.prefix + "Command"}, DescriptorSetSha256: s.descriptorDigest, SupportsPlayerLeft: true}, nil
+
+func (s *server) Describe(context.Context, *modulev2.DescribeRequest) (*modulev2.DescribeResponse, error) {
+	return &modulev2.DescribeResponse{
+		ModuleId:            s.id,
+		Version:             s.version,
+		AbiVersion:          2,
+		StateTypeUrl:        s.prefix + "State",
+		CommandTypeUrls:     []string{s.prefix + "Command"},
+		DescriptorSetSha256: s.descriptorDigest,
+	}, nil
 }
-func (s *server) NewState(_ context.Context, request *modulev1.NewStateRequest) (*modulev1.TransitionResponse, error) {
+
+func (s *server) CreateState(_ context.Context, request *modulev2.CreateStateRequest) (*modulev2.TransitionResponse, error) {
 	if err := validContext(request.GetContext()); err != nil {
 		return nil, err
 	}
-	value := state{Status: "waiting"}
-	if s.id == "xiangqi" {
+	if request.GetSetup() == nil {
+		return nil, status.Error(codes.InvalidArgument, "setup is required")
+	}
+	playerCount := request.GetSetup().GetPlayerCount()
+	if !s.supportsPlayerCount(playerCount) {
+		return nil, status.Error(codes.InvalidArgument, "unsupported player_count")
+	}
+	value := state{Status: "active", Players: make([]player, playerCount)}
+	for seat := range playerCount {
+		value.Players[seat].SeatIndex = seat
+	}
+	switch s.id {
+	case "xiangqi":
 		value.FEN = "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1"
 		value.Side = "red"
-		value.Status = "active"
+	case "cardgame":
+		value.Status = "waiting"
 	}
-	return s.transition(value, map[string]any{"kind": "created"}, true)
+	return s.transition(value, map[string]any{"kind": "created", "player_count": playerCount}, true)
 }
-func (s *server) PlayerJoined(_ context.Context, request *modulev1.PlayerTransitionRequest) (*modulev1.TransitionResponse, error) {
-	value, err := s.decodeState(request.GetState())
-	if err != nil {
+
+func (s *server) Apply(_ context.Context, request *modulev2.ApplyRequest) (*modulev2.TransitionResponse, error) {
+	if err := validContext(request.GetContext()); err != nil {
 		return nil, err
 	}
-	for _, existing := range value.Players {
-		if existing.ID == request.PlayerId {
-			return s.transition(value, map[string]any{"kind": "already_joined"}, false)
-		}
-	}
-	limit := 2
-	if s.id == "cardgame" {
-		limit = 6
-	}
-	if len(value.Players) >= limit {
-		return nil, status.Error(codes.FailedPrecondition, "room full")
-	}
-	value.Players = append(value.Players, player{ID: request.PlayerId})
-	return s.transition(value, map[string]any{"kind": "player_joined", "player_id": request.PlayerId}, true)
-}
-func (s *server) PlayerLeft(_ context.Context, request *modulev1.PlayerTransitionRequest) (*modulev1.TransitionResponse, error) {
-	value, err := s.decodeState(request.GetState())
-	if err != nil {
-		return nil, err
-	}
-	if s.id == "cardgame" && value.Status == "active" {
-		return s.transition(value, map[string]any{"kind": "player_remains_seated"}, false)
-	}
-	for index, existing := range value.Players {
-		if existing.ID == request.PlayerId {
-			value.Players = append(value.Players[:index:index], value.Players[index+1:]...)
-			return s.transition(value, map[string]any{"kind": "player_left", "player_id": request.PlayerId}, true)
-		}
-	}
-	return s.transition(value, map[string]any{"kind": "not_joined"}, false)
-}
-func (s *server) Apply(_ context.Context, request *modulev1.ApplyRequest) (*modulev1.TransitionResponse, error) {
 	if request.Command == nil || request.Command.TypeUrl != s.prefix+"Command" {
 		return nil, status.Error(codes.InvalidArgument, "wrong command type")
 	}
@@ -163,51 +156,36 @@ func (s *server) Apply(_ context.Context, request *modulev1.ApplyRequest) (*modu
 	if err != nil {
 		return nil, err
 	}
+	actor := request.GetActor()
+	if actor == nil || actor.GetPlayerId() == "" || int(actor.GetSeatIndex()) >= len(value.Players) {
+		return nil, status.Error(codes.FailedPrecondition, "actor is not seated")
+	}
 	var cmd command
 	if err = decodeWireJSON(request.Command.Value, &cmd); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	if !hasPlayer(value, request.PlayerId) {
-		return nil, status.Error(codes.FailedPrecondition, "player not seated")
-	}
-	delta := map[string]any{"kind": cmd.Kind, "player_id": request.PlayerId}
+	seat := actor.GetSeatIndex()
+	delta := map[string]any{"kind": cmd.Kind, "seat_index": seat}
 	switch s.id {
 	case "hiddennumber":
 		if cmd.Kind != "set_secret" || cmd.Value < 0 || cmd.Value > 999999 {
 			return nil, status.Error(codes.InvalidArgument, "invalid secret")
 		}
-		for index := range value.Players {
-			if value.Players[index].ID == request.PlayerId {
-				secret := cmd.Value
-				value.Players[index].Secret = &secret
-			}
-		}
+		secret := cmd.Value
+		value.Players[seat].Secret = &secret
 	case "xiangqi":
-		if cmd.Kind == "move" {
-			if cmd.Move == "" {
-				return nil, status.Error(codes.InvalidArgument, "move is required")
-			}
-			value.LastMove = cmd.Move
-			if value.Side == "red" {
-				value.Side = "black"
-			} else {
-				value.Side = "red"
-			}
-		} else if cmd.Kind == "resign" {
-			value.Status = "resigned"
-		} else if cmd.Kind == "offer_draw" {
-			value.Status = "draw_offered"
-		} else {
-			return nil, status.Error(codes.InvalidArgument, "unknown command")
+		if err = applyXiangqi(&value, seat, cmd); err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
 	case "cardgame":
-		if err = applyCardgame(&value, request.PlayerId, cmd, request.Context.Seed); err != nil {
+		if err = applyCardgame(&value, seat, cmd, request.Context.Seed); err != nil {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
 	}
 	return s.transition(value, delta, true)
 }
-func (s *server) ProjectSnapshot(_ context.Context, request *modulev1.ProjectRequest) (*modulev1.ProjectionResponse, error) {
+
+func (s *server) ProjectSnapshot(_ context.Context, request *modulev2.ProjectRequest) (*modulev2.ProjectionResponse, error) {
 	value, err := s.decodeState(request.State)
 	if err != nil {
 		return nil, err
@@ -216,9 +194,10 @@ func (s *server) ProjectSnapshot(_ context.Context, request *modulev1.ProjectReq
 	if err != nil {
 		return nil, err
 	}
-	return &modulev1.ProjectionResponse{Payload: &anypb.Any{TypeUrl: s.prefix + "View", Value: payload}}, nil
+	return &modulev2.ProjectionResponse{Payload: &anypb.Any{TypeUrl: s.prefix + "View", Value: payload}}, nil
 }
-func (s *server) ProjectDelta(_ context.Context, request *modulev1.ProjectDeltaRequest) (*modulev1.ProjectionResponse, error) {
+
+func (s *server) ProjectDelta(_ context.Context, request *modulev2.ProjectDeltaRequest) (*modulev2.ProjectionResponse, error) {
 	before, err := s.decodeState(request.BeforeState)
 	if err != nil {
 		return nil, err
@@ -235,10 +214,10 @@ func (s *server) ProjectDelta(_ context.Context, request *modulev1.ProjectDeltaR
 	if err != nil {
 		return nil, err
 	}
-	return &modulev1.ProjectionResponse{Payload: &anypb.Any{TypeUrl: s.prefix + "View", Value: afterView}, NoVisibleChange: bytes.Equal(beforeView, afterView)}, nil
+	return &modulev2.ProjectionResponse{Payload: &anypb.Any{TypeUrl: s.prefix + "View", Value: afterView}, NoVisibleChange: bytes.Equal(beforeView, afterView)}, nil
 }
 
-func (s *server) transition(value state, delta any, changed bool) (*modulev1.TransitionResponse, error) {
+func (s *server) transition(value state, delta any, changed bool) (*modulev2.TransitionResponse, error) {
 	stateJSON, err := json.Marshal(value)
 	if err != nil {
 		return nil, err
@@ -247,8 +226,13 @@ func (s *server) transition(value state, delta any, changed bool) (*modulev1.Tra
 	if err != nil {
 		return nil, err
 	}
-	return &modulev1.TransitionResponse{Changed: changed, NextState: &anypb.Any{TypeUrl: s.prefix + "State", Value: encodeWireJSON(stateJSON)}, Delta: &anypb.Any{TypeUrl: s.prefix + "Delta", Value: encodeWireJSON(deltaJSON)}}, nil
+	return &modulev2.TransitionResponse{
+		Changed:   changed,
+		NextState: &anypb.Any{TypeUrl: s.prefix + "State", Value: encodeWireJSON(stateJSON)},
+		Delta:     &anypb.Any{TypeUrl: s.prefix + "Delta", Value: encodeWireJSON(deltaJSON)},
+	}, nil
 }
+
 func (s *server) decodeState(value *anypb.Any) (state, error) {
 	if value == nil || value.TypeUrl != s.prefix+"State" {
 		return state{}, status.Error(codes.InvalidArgument, "wrong state type")
@@ -259,15 +243,25 @@ func (s *server) decodeState(value *anypb.Any) (state, error) {
 	}
 	return result, nil
 }
-func (s *server) project(value state, viewer *modulev1.Viewer) ([]byte, error) {
-	result := view{FEN: value.FEN, Side: value.Side, Status: value.Status, LastMove: value.LastMove, CurrentPlayer: value.CurrentPlayer, DeckCount: len(value.Deck), Discard: append([]string(nil), value.Discard...)}
+
+func (s *server) project(value state, viewer *modulev2.Viewer) ([]byte, error) {
+	result := view{
+		FEN:         value.FEN,
+		Side:        value.Side,
+		Status:      value.Status,
+		LastMove:    value.LastMove,
+		CurrentSeat: cloneSeat(value.CurrentSeat),
+		DeckCount:   len(value.Deck),
+		Discard:     append([]string(nil), value.Discard...),
+	}
 	for _, p := range value.Players {
-		projected := viewPlayer{ID: p.ID, HasSecret: p.Secret != nil, HandCount: len(p.Hand)}
-		canSee := viewer != nil && (viewer.Scope == modulev1.ViewScope_VIEW_SCOPE_FULL || (viewer.Scope == modulev1.ViewScope_VIEW_SCOPE_PLAYER && viewer.PlayerId == p.ID))
+		projected := viewPlayer{SeatIndex: p.SeatIndex, HasSecret: p.Secret != nil, HandCount: len(p.Hand)}
+		canSee := viewer != nil && (viewer.Scope == modulev2.ViewScope_VIEW_SCOPE_FULL ||
+			(viewer.Scope == modulev2.ViewScope_VIEW_SCOPE_PLAYER && viewer.SeatIndex != nil && viewer.GetSeatIndex() == p.SeatIndex))
 		if canSee {
 			if p.Secret != nil {
-				x := *p.Secret
-				projected.Secret = &x
+				secret := *p.Secret
+				projected.Secret = &secret
 			}
 			projected.PrivateHand = append([]string(nil), p.Hand...)
 		}
@@ -279,14 +273,55 @@ func (s *server) project(value state, viewer *modulev1.Viewer) ([]byte, error) {
 	}
 	return encodeWireJSON(raw), nil
 }
-func applyCardgame(value *state, playerID string, cmd command, seed uint64) error {
+
+func (s *server) supportsPlayerCount(count uint32) bool {
+	switch s.id {
+	case "xiangqi", "hiddennumber":
+		return count == 2
+	case "cardgame":
+		return count >= 2 && count <= 6
+	default:
+		return false
+	}
+}
+
+func applyXiangqi(value *state, seat uint32, cmd command) error {
+	expectedSeat := uint32(0)
+	if value.Side == "black" {
+		expectedSeat = 1
+	}
+	if seat != expectedSeat {
+		return errors.New("not actor's turn")
+	}
+	switch cmd.Kind {
+	case "move":
+		if cmd.Move == "" {
+			return errors.New("move is required")
+		}
+		value.LastMove = cmd.Move
+		if value.Side == "red" {
+			value.Side = "black"
+		} else {
+			value.Side = "red"
+		}
+	case "resign":
+		value.Status = "resigned"
+	case "offer_draw":
+		value.Status = "draw_offered"
+	default:
+		return errors.New("unknown command")
+	}
+	return nil
+}
+
+func applyCardgame(value *state, seat uint32, cmd command, seed uint64) error {
 	switch cmd.Kind {
 	case "start":
-		if value.Status != "waiting" || len(value.Players) < 2 || value.Players[0].ID != playerID {
+		if value.Status != "waiting" || seat != 0 {
 			return errors.New("cannot start")
 		}
 		value.Status = "active"
-		value.CurrentPlayer = value.Players[0].ID
+		value.CurrentSeat = seatPointer(0)
 		value.Deck = make([]string, 0, 40)
 		for i := 0; i < 40; i++ {
 			value.Deck = append(value.Deck, fmt.Sprintf("card-%d-%d", seed%997, uint64(i)))
@@ -298,9 +333,11 @@ func applyCardgame(value *state, playerID string, cmd command, seed uint64) erro
 			}
 		}
 	case "play_card":
-		index := playerIndex(*value, playerID)
+		if value.Status != "active" || value.CurrentSeat == nil || *value.CurrentSeat != seat {
+			return errors.New("not actor's turn")
+		}
 		cardIndex := -1
-		for i, card := range value.Players[index].Hand {
+		for i, card := range value.Players[seat].Hand {
 			if card == cmd.CardID {
 				cardIndex = i
 				break
@@ -309,38 +346,46 @@ func applyCardgame(value *state, playerID string, cmd command, seed uint64) erro
 		if cardIndex < 0 {
 			return errors.New("card not in hand")
 		}
-		value.Players[index].Hand = append(value.Players[index].Hand[:cardIndex:cardIndex], value.Players[index].Hand[cardIndex+1:]...)
+		value.Players[seat].Hand = append(value.Players[seat].Hand[:cardIndex:cardIndex], value.Players[seat].Hand[cardIndex+1:]...)
 		value.Discard = append(value.Discard, cmd.CardID)
 	case "end_turn":
-		index := playerIndex(*value, playerID)
-		value.CurrentPlayer = value.Players[(index+1)%len(value.Players)].ID
+		if value.Status != "active" || value.CurrentSeat == nil || *value.CurrentSeat != seat {
+			return errors.New("not actor's turn")
+		}
+		value.CurrentSeat = seatPointer((seat + 1) % uint32(len(value.Players)))
 	case "attach_modifier":
-		if cmd.CardID == "" || cmd.TargetCardID == "" {
-			return errors.New("modifier and target are required")
+		if value.Status != "active" || value.CurrentSeat == nil || *value.CurrentSeat != seat {
+			return errors.New("not actor's turn")
+		}
+		if cmd.CardID == "" || cmd.TargetCardID == "" || cmd.TargetSeat == nil || int(*cmd.TargetSeat) >= len(value.Players) {
+			return errors.New("modifier, target seat, and target card are required")
 		}
 	default:
 		return errors.New("unknown card command")
 	}
 	return nil
 }
-func playerIndex(value state, id string) int {
-	for index, p := range value.Players {
-		if p.ID == id {
-			return index
-		}
-	}
-	return -1
-}
-func hasPlayer(value state, id string) bool { return playerIndex(value, id) >= 0 }
-func validContext(value *modulev1.RoomContext) error {
-	if value == nil || value.OperationId == "" || value.RoomId == "" {
-		return status.Error(codes.InvalidArgument, "operation_id and room_id are required")
+
+func validContext(value *modulev2.DeterministicContext) error {
+	if value == nil {
+		return status.Error(codes.InvalidArgument, "deterministic context is required")
 	}
 	return nil
 }
+
+func seatPointer(value uint32) *uint32 { return &value }
+
+func cloneSeat(value *uint32) *uint32 {
+	if value == nil {
+		return nil
+	}
+	return seatPointer(*value)
+}
+
 func encodeWireJSON(raw []byte) []byte {
 	return protowire.AppendBytes(protowire.AppendTag(nil, 1, protowire.BytesType), raw)
 }
+
 func decodeWireJSON(raw []byte, target any) error {
 	number, kind, n := protowire.ConsumeTag(raw)
 	if n < 0 || number != 1 || kind != protowire.BytesType {
@@ -352,6 +397,7 @@ func decodeWireJSON(raw []byte, target any) error {
 	}
 	return json.Unmarshal(value, target)
 }
+
 func descriptorSHA() []byte {
 	raw, err := os.ReadFile(env("RULESHIFT_DESCRIPTOR_PATH", "/app/descriptor.pb"))
 	if err != nil {
@@ -362,6 +408,7 @@ func descriptorSHA() []byte {
 	sum := sha256.Sum256(raw)
 	return sum[:]
 }
+
 func env(key, fallback string) string {
 	if value := os.Getenv(key); value != "" {
 		return value

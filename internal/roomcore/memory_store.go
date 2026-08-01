@@ -93,6 +93,35 @@ func (s *MemoryStore) Commit(ctx context.Context, state State, event Event, snap
 	return nil
 }
 
+func (s *MemoryStore) LoadMembership(ctx context.Context, roomID string) (string, []Participant, error) {
+	if err := ctx.Err(); err != nil {
+		return "", nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	room := s.rooms[roomID]
+	if room == nil {
+		return "", nil, ErrRoomNotFound
+	}
+	return room.state.Status, cloneParticipants(room.state.Participants), nil
+}
+
+func (s *MemoryStore) SaveMembership(ctx context.Context, state State) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	room := s.rooms[state.Route.RoomID]
+	if room == nil {
+		return ErrRoomNotFound
+	}
+	room.state.Status = state.Status
+	room.state.Participants = cloneParticipants(state.Participants)
+	room.state.UpdatedAt = state.UpdatedAt
+	return nil
+}
+
 func (s *MemoryStore) SaveSnapshot(ctx context.Context, snapshot Snapshot) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -143,7 +172,14 @@ func cloneOpaque(value module.OpaqueState) module.OpaqueState {
 	value.Payload = append([]byte(nil), value.Payload...)
 	return value
 }
-func cloneState(value State) State          { value.Opaque = cloneOpaque(value.Opaque); return value }
+func cloneState(value State) State {
+	value.Opaque = cloneOpaque(value.Opaque)
+	value.Participants = cloneParticipants(value.Participants)
+	return value
+}
+func cloneParticipants(values []Participant) []Participant {
+	return append([]Participant(nil), values...)
+}
 func cloneSnapshot(value Snapshot) Snapshot { value.State = cloneOpaque(value.State); return value }
 func cloneEvent(value Event) Event {
 	value.Input = cloneOpaque(value.Input)

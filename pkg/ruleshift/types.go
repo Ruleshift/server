@@ -49,6 +49,8 @@ type RuntimeManifest struct {
 	ModuleID             string              `json:"module_id"`
 	Version              string              `json:"version"`
 	ABIVersion           uint32              `json:"abi_version"`
+	MinPlayers           uint32              `json:"min_players"`
+	MaxPlayers           uint32              `json:"max_players"`
 	StateTypeURL         string              `json:"state_type_url"`
 	CommandTypeURLs      []string            `json:"command_type_urls"`
 	TransitionDeadlineMS int                 `json:"transition_deadline_ms,omitempty"`
@@ -110,14 +112,16 @@ type ValidationStatus struct {
 }
 
 type CreateRoomRequest struct {
-	ModuleID string `json:"module_id"`
-	Version  string `json:"version,omitempty"`
+	ModuleID    string `json:"module_id"`
+	Version     string `json:"version,omitempty"`
+	PlayerCount uint32 `json:"player_count,omitempty"`
 }
 
 type Room struct {
 	RoomID         string          `json:"room_id"`
 	Module         ModuleReference `json:"module"`
 	ModuleDatabase string          `json:"module_database"`
+	PlayerCount    uint32          `json:"player_count"`
 	Seed           uint64          `json:"seed"`
 	CreatedAt      time.Time       `json:"created_at"`
 	InviteCode     string          `json:"invite_code"`

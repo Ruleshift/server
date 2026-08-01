@@ -29,7 +29,7 @@ func TestAuthorizeAllowsKubernetesHealthCheckWithoutToken(t *testing.T) {
 func TestAuthorizeRejectsModuleCallWithoutToken(t *testing.T) {
 	service := &server{token: "secret"}
 
-	_, err := service.authorize(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/ruleshift.module.v1.ModuleRuntime/Describe"}, func(context.Context, any) (any, error) {
+	_, err := service.authorize(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/ruleshift.module.v2.ModuleRuntime/Describe"}, func(context.Context, any) (any, error) {
 		t.Fatal("module handler must not be called")
 		return nil, nil
 	})

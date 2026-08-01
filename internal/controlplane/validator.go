@@ -14,13 +14,12 @@ import (
 const failedValidationCleanupTimeout = 10 * time.Second
 
 type Description struct {
-	ModuleID           string
-	Version            string
-	ABIVersion         uint32
-	StateTypeURL       string
-	CommandTypeURLs    []string
-	DescriptorDigest   string
-	SupportsPlayerLeft bool
+	ModuleID         string
+	Version          string
+	ABIVersion       uint32
+	StateTypeURL     string
+	CommandTypeURLs  []string
+	DescriptorDigest string
 }
 
 type RuntimeConnector interface {
@@ -138,11 +137,6 @@ func matchDescription(version Version, description Description) error {
 	}
 	if description.DescriptorDigest != version.DescriptorDigest {
 		return fmt.Errorf("Describe descriptor digest does not match published descriptor")
-	}
-	for _, capability := range version.Manifest.Capabilities {
-		if capability == "player_lifecycle" && !description.SupportsPlayerLeft {
-			return fmt.Errorf("Describe capabilities do not match manifest: player_lifecycle requires PlayerLeft")
-		}
 	}
 	if len(description.CommandTypeURLs) != len(version.Manifest.CommandTypeURLs) {
 		return fmt.Errorf("Describe command type URLs do not match manifest")

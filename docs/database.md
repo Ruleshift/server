@@ -10,15 +10,19 @@ each developer/module pair.
 - `modules` and the current active version;
 - immutable `module_versions` with OCI and descriptor digests;
 - bounded `module_validation_runs`;
-- `room_routes` pinned to developer/module/version/image digest.
+- `room_routes` pinned to developer/module/version/image digest and immutable
+  `player_count`;
 - unique six-character `room_invite_codes` with a 24-hour deadline.
 
 Registry usernames, passwords, and tokens are never stored here.
 
 ## Module database
 
-- `rooms`: revision, lifecycle, seed, opaque protobuf state and SHA-256 digest;
-- `room_events`: generic lifecycle/command event, protobuf input/delta bytes,
+- `rooms`: revision, lobby/active status, required players, seed, opaque
+  protobuf state and SHA-256 digest;
+- `room_participants`: persistent authenticated player-to-seat mapping, separate
+  from the module-owned protobuf state;
+- `room_events`: generic command event, protobuf input/delta bytes,
   revision range and resulting state digest;
 - `room_snapshots`: opaque protobuf state every 100 revisions and on eviction;
 - additive developer tables declared by version manifest.

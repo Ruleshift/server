@@ -119,6 +119,7 @@ paths:
               properties:
                 module_id: {type: string}
                 version: {type: string, description: Optional pinned version; active is selected when omitted}
+                player_count: {type: integer, minimum: 1, maximum: 64, description: Defaults to the module manifest max_players}
       responses:
         "201": {description: Pinned room route, content: {application/json: {schema: {$ref: "#/components/schemas/RoomRoute"}}}}
   /v2/rooms/{room_id}:
@@ -157,8 +158,21 @@ components:
         image_ref: {type: string}
         abi_version: {type: integer}
         descriptor_digest: {type: string}
-        manifest: {type: object, additionalProperties: true}
+        manifest: {$ref: "#/components/schemas/RuntimeManifest"}
         status: {type: string, enum: [validating, active, inactive, failed, degraded]}
+    RuntimeManifest:
+      type: object
+      required: [module_id, version, abi_version, min_players, max_players, state_type_url, command_type_urls]
+      properties:
+        module_id: {type: string}
+        version: {type: string}
+        abi_version: {type: integer, const: 2}
+        min_players: {type: integer, minimum: 1, maximum: 64}
+        max_players: {type: integer, minimum: 1, maximum: 64}
+        state_type_url: {type: string}
+        command_type_urls: {type: array, minItems: 1, items: {type: string}}
+        transition_deadline_ms: {type: integer, minimum: 0, maximum: 250}
+        capabilities: {type: array, items: {type: string}}
     ValidationRun:
       type: object
       properties:
@@ -168,11 +182,12 @@ components:
         finished_at: {type: [string, "null"], format: date-time}
     RoomRoute:
       type: object
-      required: [room_id, module, module_database, seed, created_at, invite_code, invite_deadline]
+      required: [room_id, module, module_database, player_count, seed, created_at, invite_code, invite_deadline]
       properties:
         room_id: {type: string}
         module: {$ref: "#/components/schemas/ModuleRef"}
         module_database: {type: string}
+        player_count: {type: integer, minimum: 1, maximum: 64}
         seed: {type: integer, minimum: 0}
         created_at: {type: string, format: date-time}
         invite_code: {type: string, pattern: "^[0-9A-Z]{6}$", minLength: 6, maxLength: 6}

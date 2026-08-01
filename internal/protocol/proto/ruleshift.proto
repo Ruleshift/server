@@ -55,6 +55,12 @@ enum ViewScope {
   VIEW_SCOPE_FULL = 3;
 }
 
+enum RoomStatus {
+  ROOM_STATUS_UNSPECIFIED = 0;
+  ROOM_STATUS_LOBBY = 1;
+  ROOM_STATUS_ACTIVE = 2;
+}
+
 message ModuleRef {
   string module_id = 1;
   string version = 2;
@@ -72,6 +78,9 @@ message JoinRoomOk {
   JoinMode join_mode = 3;
   ViewScope view_scope = 4;
   ModuleRef module = 5;
+  bool seated = 6;
+  uint32 seat_index = 7;
+  RoomStatus room_status = 8;
 }
 
 message GameCommand {
@@ -86,6 +95,7 @@ message StateSnapshot {
   ModuleRef module = 3;
   bytes view_digest = 4;
   google.protobuf.Any state = 5;
+  RoomStatus room_status = 6;
 }
 
 message StateDelta {

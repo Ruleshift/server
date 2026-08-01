@@ -123,6 +123,55 @@ func (ViewScope) EnumDescriptor() ([]byte, []int) {
 	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{1}
 }
 
+type RoomStatus int32
+
+const (
+	RoomStatus_ROOM_STATUS_UNSPECIFIED RoomStatus = 0
+	RoomStatus_ROOM_STATUS_LOBBY       RoomStatus = 1
+	RoomStatus_ROOM_STATUS_ACTIVE      RoomStatus = 2
+)
+
+// Enum value maps for RoomStatus.
+var (
+	RoomStatus_name = map[int32]string{
+		0: "ROOM_STATUS_UNSPECIFIED",
+		1: "ROOM_STATUS_LOBBY",
+		2: "ROOM_STATUS_ACTIVE",
+	}
+	RoomStatus_value = map[string]int32{
+		"ROOM_STATUS_UNSPECIFIED": 0,
+		"ROOM_STATUS_LOBBY":       1,
+		"ROOM_STATUS_ACTIVE":      2,
+	}
+)
+
+func (x RoomStatus) Enum() *RoomStatus {
+	p := new(RoomStatus)
+	*p = x
+	return p
+}
+
+func (x RoomStatus) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RoomStatus) Descriptor() protoreflect.EnumDescriptor {
+	return file_internal_protocol_proto_ruleshift_proto_enumTypes[2].Descriptor()
+}
+
+func (RoomStatus) Type() protoreflect.EnumType {
+	return &file_internal_protocol_proto_ruleshift_proto_enumTypes[2]
+}
+
+func (x RoomStatus) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RoomStatus.Descriptor instead.
+func (RoomStatus) EnumDescriptor() ([]byte, []int) {
+	return file_internal_protocol_proto_ruleshift_proto_rawDescGZIP(), []int{2}
+}
+
 type ClientEnvelope struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	ProtocolVersion uint32                 `protobuf:"varint,1,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
@@ -706,6 +755,9 @@ type JoinRoomOk struct {
 	JoinMode        JoinMode               `protobuf:"varint,3,opt,name=join_mode,json=joinMode,proto3,enum=ruleshift.v2.JoinMode" json:"join_mode,omitempty"`
 	ViewScope       ViewScope              `protobuf:"varint,4,opt,name=view_scope,json=viewScope,proto3,enum=ruleshift.v2.ViewScope" json:"view_scope,omitempty"`
 	Module          *ModuleRef             `protobuf:"bytes,5,opt,name=module,proto3" json:"module,omitempty"`
+	Seated          bool                   `protobuf:"varint,6,opt,name=seated,proto3" json:"seated,omitempty"`
+	SeatIndex       uint32                 `protobuf:"varint,7,opt,name=seat_index,json=seatIndex,proto3" json:"seat_index,omitempty"`
+	RoomStatus      RoomStatus             `protobuf:"varint,8,opt,name=room_status,json=roomStatus,proto3,enum=ruleshift.v2.RoomStatus" json:"room_status,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -775,6 +827,27 @@ func (x *JoinRoomOk) GetModule() *ModuleRef {
 	return nil
 }
 
+func (x *JoinRoomOk) GetSeated() bool {
+	if x != nil {
+		return x.Seated
+	}
+	return false
+}
+
+func (x *JoinRoomOk) GetSeatIndex() uint32 {
+	if x != nil {
+		return x.SeatIndex
+	}
+	return 0
+}
+
+func (x *JoinRoomOk) GetRoomStatus() RoomStatus {
+	if x != nil {
+		return x.RoomStatus
+	}
+	return RoomStatus_ROOM_STATUS_UNSPECIFIED
+}
+
 type GameCommand struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	RoomId           string                 `protobuf:"bytes,1,opt,name=room_id,json=roomId,proto3" json:"room_id,omitempty"`
@@ -842,6 +915,7 @@ type StateSnapshot struct {
 	Module        *ModuleRef             `protobuf:"bytes,3,opt,name=module,proto3" json:"module,omitempty"`
 	ViewDigest    []byte                 `protobuf:"bytes,4,opt,name=view_digest,json=viewDigest,proto3" json:"view_digest,omitempty"`
 	State         *anypb.Any             `protobuf:"bytes,5,opt,name=state,proto3" json:"state,omitempty"`
+	RoomStatus    RoomStatus             `protobuf:"varint,6,opt,name=room_status,json=roomStatus,proto3,enum=ruleshift.v2.RoomStatus" json:"room_status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -909,6 +983,13 @@ func (x *StateSnapshot) GetState() *anypb.Any {
 		return x.State
 	}
 	return nil
+}
+
+func (x *StateSnapshot) GetRoomStatus() RoomStatus {
+	if x != nil {
+		return x.RoomStatus
+	}
+	return RoomStatus_ROOM_STATUS_UNSPECIFIED
 }
 
 type StateDelta struct {
@@ -1256,7 +1337,7 @@ const file_internal_protocol_proto_ruleshift_proto_rawDesc = "" +
 	"\vinvite_code\x18\x01 \x01(\tR\n" +
 	"inviteCode\x12,\n" +
 	"\x12last_seen_revision\x18\x02 \x01(\x04R\x10lastSeenRevision\x123\n" +
-	"\tjoin_mode\x18\x03 \x01(\x0e2\x16.ruleshift.v2.JoinModeR\bjoinMode\"\xee\x01\n" +
+	"\tjoin_mode\x18\x03 \x01(\x0e2\x16.ruleshift.v2.JoinModeR\bjoinMode\"\xe0\x02\n" +
 	"\n" +
 	"JoinRoomOk\x12\x17\n" +
 	"\aroom_id\x18\x01 \x01(\tR\x06roomId\x12)\n" +
@@ -1264,18 +1345,25 @@ const file_internal_protocol_proto_ruleshift_proto_rawDesc = "" +
 	"\tjoin_mode\x18\x03 \x01(\x0e2\x16.ruleshift.v2.JoinModeR\bjoinMode\x126\n" +
 	"\n" +
 	"view_scope\x18\x04 \x01(\x0e2\x17.ruleshift.v2.ViewScopeR\tviewScope\x12/\n" +
-	"\x06module\x18\x05 \x01(\v2\x17.ruleshift.v2.ModuleRefR\x06module\"\x83\x01\n" +
+	"\x06module\x18\x05 \x01(\v2\x17.ruleshift.v2.ModuleRefR\x06module\x12\x16\n" +
+	"\x06seated\x18\x06 \x01(\bR\x06seated\x12\x1d\n" +
+	"\n" +
+	"seat_index\x18\a \x01(\rR\tseatIndex\x129\n" +
+	"\vroom_status\x18\b \x01(\x0e2\x18.ruleshift.v2.RoomStatusR\n" +
+	"roomStatus\"\x83\x01\n" +
 	"\vGameCommand\x12\x17\n" +
 	"\aroom_id\x18\x01 \x01(\tR\x06roomId\x12+\n" +
 	"\x11expected_revision\x18\x02 \x01(\x04R\x10expectedRevision\x12.\n" +
-	"\acommand\x18\x03 \x01(\v2\x14.google.protobuf.AnyR\acommand\"\xc2\x01\n" +
+	"\acommand\x18\x03 \x01(\v2\x14.google.protobuf.AnyR\acommand\"\xfd\x01\n" +
 	"\rStateSnapshot\x12\x17\n" +
 	"\aroom_id\x18\x01 \x01(\tR\x06roomId\x12\x1a\n" +
 	"\brevision\x18\x02 \x01(\x04R\brevision\x12/\n" +
 	"\x06module\x18\x03 \x01(\v2\x17.ruleshift.v2.ModuleRefR\x06module\x12\x1f\n" +
 	"\vview_digest\x18\x04 \x01(\fR\n" +
 	"viewDigest\x12*\n" +
-	"\x05state\x18\x05 \x01(\v2\x14.google.protobuf.AnyR\x05state\"\xd0\x02\n" +
+	"\x05state\x18\x05 \x01(\v2\x14.google.protobuf.AnyR\x05state\x129\n" +
+	"\vroom_status\x18\x06 \x01(\x0e2\x18.ruleshift.v2.RoomStatusR\n" +
+	"roomStatus\"\xd0\x02\n" +
 	"\n" +
 	"StateDelta\x12\x17\n" +
 	"\aroom_id\x18\x01 \x01(\tR\x06roomId\x12+\n" +
@@ -1306,7 +1394,12 @@ const file_internal_protocol_proto_ruleshift_proto_rawDesc = "" +
 	"\x16VIEW_SCOPE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11VIEW_SCOPE_PLAYER\x10\x01\x12\x15\n" +
 	"\x11VIEW_SCOPE_PUBLIC\x10\x02\x12\x13\n" +
-	"\x0fVIEW_SCOPE_FULL\x10\x03BlZRgithub.com/Ruleshift/server/internal/protocol/generated/go/ruleshiftv2;ruleshiftv2\xaa\x02\x15Ruleshift.Protocol.V2b\x06proto3"
+	"\x0fVIEW_SCOPE_FULL\x10\x03*X\n" +
+	"\n" +
+	"RoomStatus\x12\x1b\n" +
+	"\x17ROOM_STATUS_UNSPECIFIED\x10\x00\x12\x15\n" +
+	"\x11ROOM_STATUS_LOBBY\x10\x01\x12\x16\n" +
+	"\x12ROOM_STATUS_ACTIVE\x10\x02BlZRgithub.com/Ruleshift/server/internal/protocol/generated/go/ruleshiftv2;ruleshiftv2\xaa\x02\x15Ruleshift.Protocol.V2b\x06proto3"
 
 var (
 	file_internal_protocol_proto_ruleshift_proto_rawDescOnce sync.Once
@@ -1320,55 +1413,58 @@ func file_internal_protocol_proto_ruleshift_proto_rawDescGZIP() []byte {
 	return file_internal_protocol_proto_ruleshift_proto_rawDescData
 }
 
-var file_internal_protocol_proto_ruleshift_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_internal_protocol_proto_ruleshift_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
 var file_internal_protocol_proto_ruleshift_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_internal_protocol_proto_ruleshift_proto_goTypes = []any{
 	(JoinMode)(0),           // 0: ruleshift.v2.JoinMode
 	(ViewScope)(0),          // 1: ruleshift.v2.ViewScope
-	(*ClientEnvelope)(nil),  // 2: ruleshift.v2.ClientEnvelope
-	(*ServerEnvelope)(nil),  // 3: ruleshift.v2.ServerEnvelope
-	(*AuthRequest)(nil),     // 4: ruleshift.v2.AuthRequest
-	(*AuthOk)(nil),          // 5: ruleshift.v2.AuthOk
-	(*AuthFailed)(nil),      // 6: ruleshift.v2.AuthFailed
-	(*ModuleRef)(nil),       // 7: ruleshift.v2.ModuleRef
-	(*JoinRoomRequest)(nil), // 8: ruleshift.v2.JoinRoomRequest
-	(*JoinRoomOk)(nil),      // 9: ruleshift.v2.JoinRoomOk
-	(*GameCommand)(nil),     // 10: ruleshift.v2.GameCommand
-	(*StateSnapshot)(nil),   // 11: ruleshift.v2.StateSnapshot
-	(*StateDelta)(nil),      // 12: ruleshift.v2.StateDelta
-	(*SnapshotRequest)(nil), // 13: ruleshift.v2.SnapshotRequest
-	(*ErrorMessage)(nil),    // 14: ruleshift.v2.ErrorMessage
-	(*Ping)(nil),            // 15: ruleshift.v2.Ping
-	(*Pong)(nil),            // 16: ruleshift.v2.Pong
-	(*anypb.Any)(nil),       // 17: google.protobuf.Any
+	(RoomStatus)(0),         // 2: ruleshift.v2.RoomStatus
+	(*ClientEnvelope)(nil),  // 3: ruleshift.v2.ClientEnvelope
+	(*ServerEnvelope)(nil),  // 4: ruleshift.v2.ServerEnvelope
+	(*AuthRequest)(nil),     // 5: ruleshift.v2.AuthRequest
+	(*AuthOk)(nil),          // 6: ruleshift.v2.AuthOk
+	(*AuthFailed)(nil),      // 7: ruleshift.v2.AuthFailed
+	(*ModuleRef)(nil),       // 8: ruleshift.v2.ModuleRef
+	(*JoinRoomRequest)(nil), // 9: ruleshift.v2.JoinRoomRequest
+	(*JoinRoomOk)(nil),      // 10: ruleshift.v2.JoinRoomOk
+	(*GameCommand)(nil),     // 11: ruleshift.v2.GameCommand
+	(*StateSnapshot)(nil),   // 12: ruleshift.v2.StateSnapshot
+	(*StateDelta)(nil),      // 13: ruleshift.v2.StateDelta
+	(*SnapshotRequest)(nil), // 14: ruleshift.v2.SnapshotRequest
+	(*ErrorMessage)(nil),    // 15: ruleshift.v2.ErrorMessage
+	(*Ping)(nil),            // 16: ruleshift.v2.Ping
+	(*Pong)(nil),            // 17: ruleshift.v2.Pong
+	(*anypb.Any)(nil),       // 18: google.protobuf.Any
 }
 var file_internal_protocol_proto_ruleshift_proto_depIdxs = []int32{
-	4,  // 0: ruleshift.v2.ClientEnvelope.auth_request:type_name -> ruleshift.v2.AuthRequest
-	8,  // 1: ruleshift.v2.ClientEnvelope.join_room:type_name -> ruleshift.v2.JoinRoomRequest
-	10, // 2: ruleshift.v2.ClientEnvelope.game_command:type_name -> ruleshift.v2.GameCommand
-	13, // 3: ruleshift.v2.ClientEnvelope.snapshot_request:type_name -> ruleshift.v2.SnapshotRequest
-	15, // 4: ruleshift.v2.ClientEnvelope.ping:type_name -> ruleshift.v2.Ping
-	5,  // 5: ruleshift.v2.ServerEnvelope.auth_ok:type_name -> ruleshift.v2.AuthOk
-	6,  // 6: ruleshift.v2.ServerEnvelope.auth_failed:type_name -> ruleshift.v2.AuthFailed
-	9,  // 7: ruleshift.v2.ServerEnvelope.join_room_ok:type_name -> ruleshift.v2.JoinRoomOk
-	11, // 8: ruleshift.v2.ServerEnvelope.state_snapshot:type_name -> ruleshift.v2.StateSnapshot
-	12, // 9: ruleshift.v2.ServerEnvelope.state_delta:type_name -> ruleshift.v2.StateDelta
-	14, // 10: ruleshift.v2.ServerEnvelope.error:type_name -> ruleshift.v2.ErrorMessage
-	16, // 11: ruleshift.v2.ServerEnvelope.pong:type_name -> ruleshift.v2.Pong
+	5,  // 0: ruleshift.v2.ClientEnvelope.auth_request:type_name -> ruleshift.v2.AuthRequest
+	9,  // 1: ruleshift.v2.ClientEnvelope.join_room:type_name -> ruleshift.v2.JoinRoomRequest
+	11, // 2: ruleshift.v2.ClientEnvelope.game_command:type_name -> ruleshift.v2.GameCommand
+	14, // 3: ruleshift.v2.ClientEnvelope.snapshot_request:type_name -> ruleshift.v2.SnapshotRequest
+	16, // 4: ruleshift.v2.ClientEnvelope.ping:type_name -> ruleshift.v2.Ping
+	6,  // 5: ruleshift.v2.ServerEnvelope.auth_ok:type_name -> ruleshift.v2.AuthOk
+	7,  // 6: ruleshift.v2.ServerEnvelope.auth_failed:type_name -> ruleshift.v2.AuthFailed
+	10, // 7: ruleshift.v2.ServerEnvelope.join_room_ok:type_name -> ruleshift.v2.JoinRoomOk
+	12, // 8: ruleshift.v2.ServerEnvelope.state_snapshot:type_name -> ruleshift.v2.StateSnapshot
+	13, // 9: ruleshift.v2.ServerEnvelope.state_delta:type_name -> ruleshift.v2.StateDelta
+	15, // 10: ruleshift.v2.ServerEnvelope.error:type_name -> ruleshift.v2.ErrorMessage
+	17, // 11: ruleshift.v2.ServerEnvelope.pong:type_name -> ruleshift.v2.Pong
 	0,  // 12: ruleshift.v2.JoinRoomRequest.join_mode:type_name -> ruleshift.v2.JoinMode
 	0,  // 13: ruleshift.v2.JoinRoomOk.join_mode:type_name -> ruleshift.v2.JoinMode
 	1,  // 14: ruleshift.v2.JoinRoomOk.view_scope:type_name -> ruleshift.v2.ViewScope
-	7,  // 15: ruleshift.v2.JoinRoomOk.module:type_name -> ruleshift.v2.ModuleRef
-	17, // 16: ruleshift.v2.GameCommand.command:type_name -> google.protobuf.Any
-	7,  // 17: ruleshift.v2.StateSnapshot.module:type_name -> ruleshift.v2.ModuleRef
-	17, // 18: ruleshift.v2.StateSnapshot.state:type_name -> google.protobuf.Any
-	7,  // 19: ruleshift.v2.StateDelta.module:type_name -> ruleshift.v2.ModuleRef
-	17, // 20: ruleshift.v2.StateDelta.delta:type_name -> google.protobuf.Any
-	21, // [21:21] is the sub-list for method output_type
-	21, // [21:21] is the sub-list for method input_type
-	21, // [21:21] is the sub-list for extension type_name
-	21, // [21:21] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	8,  // 15: ruleshift.v2.JoinRoomOk.module:type_name -> ruleshift.v2.ModuleRef
+	2,  // 16: ruleshift.v2.JoinRoomOk.room_status:type_name -> ruleshift.v2.RoomStatus
+	18, // 17: ruleshift.v2.GameCommand.command:type_name -> google.protobuf.Any
+	8,  // 18: ruleshift.v2.StateSnapshot.module:type_name -> ruleshift.v2.ModuleRef
+	18, // 19: ruleshift.v2.StateSnapshot.state:type_name -> google.protobuf.Any
+	2,  // 20: ruleshift.v2.StateSnapshot.room_status:type_name -> ruleshift.v2.RoomStatus
+	8,  // 21: ruleshift.v2.StateDelta.module:type_name -> ruleshift.v2.ModuleRef
+	18, // 22: ruleshift.v2.StateDelta.delta:type_name -> google.protobuf.Any
+	23, // [23:23] is the sub-list for method output_type
+	23, // [23:23] is the sub-list for method input_type
+	23, // [23:23] is the sub-list for extension type_name
+	23, // [23:23] is the sub-list for extension extendee
+	0,  // [0:23] is the sub-list for field type_name
 }
 
 func init() { file_internal_protocol_proto_ruleshift_proto_init() }
@@ -1397,7 +1493,7 @@ func file_internal_protocol_proto_ruleshift_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_protocol_proto_ruleshift_proto_rawDesc), len(file_internal_protocol_proto_ruleshift_proto_rawDesc)),
-			NumEnums:      2,
+			NumEnums:      3,
 			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   0,

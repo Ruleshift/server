@@ -15,6 +15,9 @@ var (
 	ErrRoomExists         = errors.New("room already exists")
 	ErrInviteCodeExists   = errors.New("room invite code already exists")
 	ErrInviteCodeNotFound = errors.New("room invite code not found or expired")
+	ErrRoomFull           = errors.New("room has no available player seats")
+	ErrMatchNotReady      = errors.New("match is waiting for players")
+	ErrPlayerNotSeated    = errors.New("player is not seated in the room")
 	ErrRevisionMismatch   = errors.New("expected revision does not match room revision")
 	ErrRuntimeClosed      = errors.New("room runtime is closed")
 	ErrQueueFull          = errors.New("room input queue is full")
@@ -23,12 +26,15 @@ var (
 const (
 	InviteCodeLength = 6
 	InviteCodeTTL    = 24 * time.Hour
+	StatusLobby      = "lobby"
+	StatusActive     = "active"
 )
 
 type Route struct {
 	RoomID         string           `json:"room_id"`
 	Module         module.ModuleRef `json:"module"`
 	ModuleDatabase string           `json:"module_database"`
+	PlayerCount    uint32           `json:"player_count"`
 	Seed           uint64           `json:"seed"`
 	CreatedAt      time.Time        `json:"created_at"`
 	InviteCode     string           `json:"invite_code,omitempty"`
@@ -36,20 +42,25 @@ type Route struct {
 }
 
 type State struct {
-	Route     Route
-	Revision  uint64
-	Opaque    module.OpaqueState
-	Status    string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	Route        Route
+	Revision     uint64
+	Opaque       module.OpaqueState
+	Status       string
+	Participants []Participant
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+type Participant struct {
+	PlayerID  string
+	SeatIndex uint32
+	JoinedAt  time.Time
 }
 
 type EventKind string
 
 const (
 	EventRoomCreated    EventKind = "room_created"
-	EventPlayerJoined   EventKind = "player_joined"
-	EventPlayerLeft     EventKind = "player_left"
 	EventCommandApplied EventKind = "command_applied"
 )
 
@@ -79,6 +90,8 @@ type Store interface {
 	Create(context.Context, State, Event, Snapshot) error
 	Load(context.Context, string) (Route, *Snapshot, []Event, error)
 	Commit(context.Context, State, Event, *Snapshot) error
+	LoadMembership(context.Context, string) (string, []Participant, error)
+	SaveMembership(context.Context, State) error
 	SaveSnapshot(context.Context, Snapshot) error
 	Route(context.Context, string) (Route, error)
 	RouteByInviteCode(context.Context, string) (Route, error)
@@ -93,6 +106,7 @@ type Command struct {
 type SnapshotView struct {
 	RoomID   string
 	Revision uint64
+	Status   string
 	Module   module.ModuleRef
 	View     module.OpaqueState
 }

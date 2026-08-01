@@ -7,6 +7,6 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /module ./examples/modu
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /module /app/module
 COPY --from=build /descriptor.pb /app/descriptor.pb
-ENV RULESHIFT_MODULE_ID=cardgame RULESHIFT_MODULE_VERSION=1.0.0
+ENV RULESHIFT_MODULE_ID=cardgame RULESHIFT_MODULE_VERSION=2.0.0
 EXPOSE 50051
 ENTRYPOINT ["/app/module"]

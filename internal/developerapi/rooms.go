@@ -27,13 +27,19 @@ type RoomManager struct {
 	Clock        func() time.Time
 }
 
-func (m RoomManager) CreateRoom(ctx context.Context, developerID, moduleID, version string) (roomcore.Route, error) {
+func (m RoomManager) CreateRoom(ctx context.Context, developerID, moduleID, version string, playerCount uint32) (roomcore.Route, error) {
 	if m.Control == nil || m.Rooms == nil {
 		return roomcore.Route{}, fmt.Errorf("room manager is not configured")
 	}
 	resolved, err := m.Control.ResolveForNewRoom(ctx, developerID, moduleID, version)
 	if err != nil {
 		return roomcore.Route{}, err
+	}
+	if playerCount == 0 {
+		playerCount = resolved.Manifest.MaxPlayers
+	}
+	if playerCount < resolved.Manifest.MinPlayers || playerCount > resolved.Manifest.MaxPlayers {
+		return roomcore.Route{}, fmt.Errorf("player_count must be between %d and %d", resolved.Manifest.MinPlayers, resolved.Manifest.MaxPlayers)
 	}
 	database := developerID + "_" + moduleID
 	if m.DatabaseName != nil {
@@ -60,6 +66,7 @@ func (m RoomManager) CreateRoom(ctx context.Context, developerID, moduleID, vers
 			RoomID:         roomID,
 			Module:         resolved.Ref,
 			ModuleDatabase: database,
+			PlayerCount:    playerCount,
 			Seed:           seed,
 			CreatedAt:      createdAt,
 			InviteCode:     inviteCode,

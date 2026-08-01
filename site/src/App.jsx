@@ -35,6 +35,7 @@ version, err := client.PublishModuleVersion(ctx, publishRequest)
 status, err := client.GetValidationStatus(ctx, module.Key, version.Ref.Version)
 room, err := client.CreateRoom(ctx, ruleshift.CreateRoomRequest{
     ModuleID: module.Key,
+    PlayerCount: 2,
 })`,
   },
   module: {
@@ -42,7 +43,7 @@ room, err := client.CreateRoom(ctx, ruleshift.CreateRoomRequest{
     language: "protobuf",
     code: `service ModuleRuntime {
   rpc Describe(DescribeRequest) returns (DescribeResponse);
-  rpc NewState(NewStateRequest) returns (TransitionResponse);
+  rpc CreateState(CreateStateRequest) returns (TransitionResponse);
   rpc Apply(ApplyRequest) returns (TransitionResponse);
   rpc ProjectSnapshot(ProjectRequest) returns (ProjectionResponse);
   rpc ProjectDelta(ProjectDeltaRequest) returns (ProjectionResponse);
@@ -56,7 +57,7 @@ room, err := client.CreateRoom(ctx, ruleshift.CreateRoomRequest{
 $room = Invoke-RestMethod -Method Post \
   -Uri "$env:RULESHIFT_URL/v2/rooms" \
   -Headers $headers -ContentType application/json \
-  -Body '{"module_id":"mygame"}'`,
+  -Body '{"module_id":"mygame","player_count":2}'`,
   },
 };
 
@@ -185,7 +186,7 @@ function RuntimePanel() {
             <pre>{`Apply {
   state: opaque_bytes,
   command: protobuf.Any,
-  player_id: "p7"
+  actor: { player_id: "p7", seat_index: 1 }
 }`}</pre>
           </div>
           <div className="runtime-cell">

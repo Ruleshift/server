@@ -20,18 +20,20 @@ Core-сообщения не содержат игровых enum или oneof. 
 
 Ошибка или тайм-аут модуля приводит к `module_unavailable` или `command_rejected` и никогда не изменяет ревизию комнаты.
 
-## Module Runtime ABI v1
+## Module Runtime ABI v2
 
-Схема: `internal/moduleruntime/proto/module_runtime.proto`. Это обычный gRPC-сервис на порту 50051 внутри Kubernetes-кластера. Сервис реализует `Describe`, `NewState`, RPC жизненного цикла игрока, `Apply` и RPC проекций.
+Схема: `internal/moduleruntime/proto/module_runtime.proto`. Это обычный gRPC-сервис на порту 50051 внутри Kubernetes-кластера. Сервис реализует `Describe`, `CreateState`, `Apply`, `ProjectSnapshot` и `ProjectDelta`. В ABI v2 нет RPC комнаты, лобби, подключения, Join, Leave или reconnect.
 
-Каждый запрос содержит `operation_id`; каждый transition должен быть stateless и не иметь побочных эффектов. Ruleshift передаёт аутентифицированный `player_id`, серверное время, ревизию комнаты и детерминированный seed комнаты. Модуль возвращает непрозрачные protobuf-данные; хранением состояния и порядком ревизий управляет Ruleshift.
+Процесс модуля не владеет текущими матчами. Ruleshift хранит opaque canonical state в комнате и передаёт его в каждый transition/projection. `CreateState` получает только неизменяемый `GameSetup.player_count`. Core хранит устойчивое соответствие аутентифицированного `player_id <-> seat_index`, запрещает команды до заполнения всех мест, освобождает место при отключении в статусе `lobby` и сохраняет его после перехода в `active`.
+
+`Apply` получает проверенный `Actor { player_id, seat_index }` отдельно от команды клиента. Проекции получают `Viewer` с optional местом и scope player/public/full. Детерминированный контекст содержит только revision, серверное время и seed комнаты. Модуль возвращает непрозрачные protobuf-данные; состоянием и порядком ревизий управляет Ruleshift.
 
 Ограничения:
 
 - состояние: 1 МиБ;
 - команда, delta и view: 256 КиБ;
 - deadline transition: по умолчанию 50 мс, не более 250 мс;
-- `NewState`: не более 250 мс;
+- `CreateState`: не более 250 мс;
 - один повторный вызов разрешён только для `Unavailable` и только в пределах исходного deadline.
 
 Трафик модуля защищён случайным bearer-токеном для каждого Deployment, который хранится в Kubernetes Secret. Учётные данные игроков и разработчиков никогда не передаются в pod-ы модулей.
@@ -42,4 +44,4 @@ Core-сообщения не содержат игровых enum или oneof. 
 ./scripts/proto.ps1
 ```
 
-Сгенерированные Go-пакеты называются `ruleshiftv2` и `moduleruntimev1`. Авторы модулей генерируют ABI bindings и bindings собственных игровых proto-файлов в отдельном репозитории модуля.
+Сгенерированные Go-пакеты называются `ruleshiftv2` и `moduleruntimev2`. Авторы модулей генерируют ABI bindings и bindings собственных игровых proto-файлов в отдельном репозитории модуля.

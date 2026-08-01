@@ -152,6 +152,9 @@ func (g *Gateway) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 			if errors.Is(handleErr, module.ErrCommandRejected) {
 				code = "command_rejected"
 			}
+			if errors.Is(handleErr, roomcore.ErrRoomFull) {
+				code = "room_full"
+			}
 			g.sendError(ctx, state.session, code, handleErr.Error())
 		}
 	}
@@ -191,17 +194,18 @@ func (g *Gateway) join(ctx context.Context, state *connection, request *ruleshif
 	if err != nil {
 		return err
 	}
-	joinMode := module.JoinModePlayer
+	joinMode := ruleshiftv2.JoinMode_JOIN_MODE_PLAYER
 	scope := module.ViewScopePlayer
+	spectator := false
 	if request.JoinMode == ruleshiftv2.JoinMode_JOIN_MODE_SPECTATOR {
-		joinMode = module.JoinModeSpectator
+		joinMode = ruleshiftv2.JoinMode_JOIN_MODE_SPECTATOR
+		spectator = true
 		scope = module.ViewScopePublic
 		if state.identity.Permissions.Has(auth.PermissionViewFullState) {
 			scope = module.ViewScopeFull
 		}
 	}
-	viewer := module.Viewer{PlayerID: state.identity.PlayerID, JoinMode: joinMode, Scope: scope}
-	snapshot, _, err := runtime.Join(ctx, viewer)
+	snapshot, viewer, err := runtime.Join(ctx, state.identity.PlayerID, spectator, scope)
 	if err != nil {
 		return err
 	}
@@ -209,7 +213,7 @@ func (g *Gateway) join(ctx context.Context, state *connection, request *ruleshif
 	state.roomID = roomID
 	state.viewer = viewer
 	g.add(roomID, state.session, viewer)
-	if err = state.session.Send(ctx, joinOK(roomID, snapshot.Revision, viewer, snapshot.Module)); err != nil {
+	if err = state.session.Send(ctx, joinOK(roomID, snapshot.Revision, snapshot.Status, joinMode, viewer, snapshot.Module)); err != nil {
 		return err
 	}
 	return g.broadcastSnapshots(ctx, roomID, runtime)
@@ -426,21 +430,24 @@ func moduleRef(value module.ModuleRef) *ruleshiftv2.ModuleRef {
 	return &ruleshiftv2.ModuleRef{ModuleId: value.ModuleID, Version: value.Version}
 }
 func snapshotEnvelope(value roomcore.SnapshotView) *ruleshiftv2.ServerEnvelope {
-	return &ruleshiftv2.ServerEnvelope{Payload: &ruleshiftv2.ServerEnvelope_StateSnapshot{StateSnapshot: &ruleshiftv2.StateSnapshot{RoomId: value.RoomID, Revision: value.Revision, Module: moduleRef(value.Module), ViewDigest: value.View.Digest[:], State: value.View.Any()}}}
+	return &ruleshiftv2.ServerEnvelope{Payload: &ruleshiftv2.ServerEnvelope_StateSnapshot{StateSnapshot: &ruleshiftv2.StateSnapshot{RoomId: value.RoomID, Revision: value.Revision, Module: moduleRef(value.Module), ViewDigest: value.View.Digest[:], State: value.View.Any(), RoomStatus: roomStatus(value.Status)}}}
 }
 func deltaEnvelope(value roomcore.DeltaView) *ruleshiftv2.ServerEnvelope {
 	return &ruleshiftv2.ServerEnvelope{Payload: &ruleshiftv2.ServerEnvelope_StateDelta{StateDelta: &ruleshiftv2.StateDelta{RoomId: value.RoomID, PreviousRevision: value.PreviousRevision, NewRevision: value.NewRevision, ChangedByPlayerId: value.ChangedBy, Module: moduleRef(value.Module), ViewDigest: value.View.Digest[:], NoVisibleChange: value.NoVisibleChange, Delta: value.View.Any()}}}
 }
-func joinOK(roomID string, revision uint64, viewer module.Viewer, ref module.ModuleRef) *ruleshiftv2.ServerEnvelope {
-	mode := ruleshiftv2.JoinMode_JOIN_MODE_PLAYER
-	if viewer.JoinMode == module.JoinModeSpectator {
-		mode = ruleshiftv2.JoinMode_JOIN_MODE_SPECTATOR
-	}
+func joinOK(roomID string, revision uint64, status string, mode ruleshiftv2.JoinMode, viewer module.Viewer, ref module.ModuleRef) *ruleshiftv2.ServerEnvelope {
 	scope := ruleshiftv2.ViewScope_VIEW_SCOPE_PLAYER
 	if viewer.Scope == module.ViewScopePublic {
 		scope = ruleshiftv2.ViewScope_VIEW_SCOPE_PUBLIC
 	} else if viewer.Scope == module.ViewScopeFull {
 		scope = ruleshiftv2.ViewScope_VIEW_SCOPE_FULL
 	}
-	return &ruleshiftv2.ServerEnvelope{Payload: &ruleshiftv2.ServerEnvelope_JoinRoomOk{JoinRoomOk: &ruleshiftv2.JoinRoomOk{RoomId: roomID, CurrentRevision: revision, JoinMode: mode, ViewScope: scope, Module: moduleRef(ref)}}}
+	return &ruleshiftv2.ServerEnvelope{Payload: &ruleshiftv2.ServerEnvelope_JoinRoomOk{JoinRoomOk: &ruleshiftv2.JoinRoomOk{RoomId: roomID, CurrentRevision: revision, JoinMode: mode, ViewScope: scope, Module: moduleRef(ref), Seated: viewer.Seated, SeatIndex: viewer.SeatIndex, RoomStatus: roomStatus(status)}}}
+}
+
+func roomStatus(status string) ruleshiftv2.RoomStatus {
+	if status == roomcore.StatusActive {
+		return ruleshiftv2.RoomStatus_ROOM_STATUS_ACTIVE
+	}
+	return ruleshiftv2.RoomStatus_ROOM_STATUS_LOBBY
 }

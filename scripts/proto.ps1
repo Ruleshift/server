@@ -2,7 +2,11 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $unityOutput = Join-Path $repoRoot "sdk\unity\com.ruleshift.runtime\Runtime\Generated"
+$bundledProtoc = Join-Path $repoRoot ".cache\protoc\current\bin\protoc.exe"
 $protoc = Get-Command protoc -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1
+if (-not $protoc -and (Test-Path -LiteralPath $bundledProtoc)) {
+    $protoc = $bundledProtoc
+}
 if (-not $protoc) {
     $protoc = Get-ChildItem -Path "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Google.Protobuf*" `
         -Filter protoc.exe -Recurse -ErrorAction SilentlyContinue |

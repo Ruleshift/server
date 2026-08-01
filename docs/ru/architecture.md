@@ -9,7 +9,7 @@ flowchart LR
     Backend["Trusted backend / Developer SDK"] -->|"HTTP v2"| Control
     Gateway --> Registry["Реестр комнат"]
     Registry --> Queue["Ограниченная последовательная очередь комнаты"]
-    Queue -->|"gRPC ABI v1 + текущее состояние"| Module["Workload закреплённого OCI-модуля"]
+    Queue -->|"gRPC ABI v2 + состояние + actor/viewer"| Module["Workload закреплённого OCI-модуля"]
     Module -->|"новое состояние + delta/view"| Queue
     Queue --> Store["БД модуля: события + snapshots"]
     Control --> ControlDB["Control DB: модули + версии + маршруты"]
@@ -38,10 +38,19 @@ active version; существующие комнаты никогда не пе
 Degraded active version исключается из создания комнат, а fallback выбирается
 из последней healthy inactive version.
 
-Room runtime меняет состояние в памяти только после успешного вызова модуля,
-успешных projections и persistence commit. Событие, ревизия состояния и
-периодический snapshot записываются одной транзакцией в БД модуля. Snapshots
-сохраняются на ревизии 0, каждые 100 ревизий и при graceful eviction.
+Room runtime меняет состояние в памяти только после успешного вызова модуля и
+persistence commit. Событие, ревизия состояния и периодический snapshot
+записываются одной транзакцией в БД модуля. Recipient projections сейчас
+выполняются после commit, поэтому их ошибка не откатывает уже принятую
+транзакцию. Snapshots сохраняются на ревизии 0, каждые 100 ревизий и при
+graceful eviction.
+
+Процесс модуля не хранит текущие матчи и не имеет RPC жизненного цикла
+комнаты/lobby. Core отдельно хранит opaque canonical state комнаты и устойчивый
+roster `player_id <-> seat_index`. Комната остаётся в `lobby`, пока не заняты
+все места. Отключение в lobby освобождает место; после перехода в `active`
+место сохраняется и возвращается тому же аутентифицированному игроку при
+reconnect.
 
 ## Изоляция Kubernetes
 
@@ -63,8 +72,8 @@ Registry credentials существуют только как tenant-scoped
 - timeout или недоступность: `module_unavailable`, ревизия не меняется;
 - malformed, oversized или wrong-type response: protocol violation;
 - три нарушения за 60 секунд: версия становится degraded;
-- рестарт gateway: загружается route, точная версия модуля, последний snapshot,
-  затем проигрываются последующие generic lifecycle/command events.
+- рестарт gateway: загружаются route и устойчивый roster, точная версия модуля,
+  последний snapshot, затем проигрываются последующие generic command events.
 
 Все очереди ограничены, обработка комнаты последовательна, а network writers
 никогда не владеют authoritative state комнаты.

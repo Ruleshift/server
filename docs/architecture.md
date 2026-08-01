@@ -9,7 +9,7 @@ flowchart LR
     Backend["Trusted backend / Developer SDK"] -->|"HTTP v2"| Control
     Gateway --> Registry["Room registry"]
     Registry --> Queue["Bounded sequential room queue"]
-    Queue -->|"gRPC ABI v1 + current state"| Module["Pinned OCI module workload"]
+    Queue -->|"gRPC ABI v2 + current state + actor/viewer"| Module["Pinned OCI module workload"]
     Module -->|"next state + delta/view"| Queue
     Queue --> Store["Module DB: events + snapshots"]
     Control --> ControlDB["Control DB: modules + versions + routes"]
@@ -38,10 +38,17 @@ active version is excluded from room creation and the latest healthy inactive
 version is used as fallback.
 
 The room runtime changes in-memory state only after the module call succeeds,
-all projections succeed, and persistence commits. Events, state revision and
-the periodic snapshot are one module-database transaction. Snapshots are saved
-at revision 0, every 100 revisions and on graceful eviction (eviction hook is
-the persistence boundary).
+and persistence commits. Events, state revision and the periodic snapshot are
+one module-database transaction. Recipient projections currently run after that
+commit, so a projection failure does not roll back an accepted transition.
+Snapshots are saved at revision 0, every 100 revisions and on graceful eviction
+(eviction hook is the persistence boundary).
+
+The module process stores no current match data and has no room/lobby lifecycle
+RPCs. Core persists the room's opaque canonical state and its separate
+authenticated player-to-seat roster. A room remains `lobby` until all required
+seats are filled. Lobby disconnects free a seat; once `active`, a seat survives
+disconnect and is reused by the same authenticated player on reconnect.
 
 ## Kubernetes isolation
 
@@ -62,8 +69,8 @@ cluster must enable encryption-at-rest for Secrets.
 - timeout/unavailability: stable `module_unavailable`, no revision change;
 - malformed, oversized or wrong-type response: protocol violation;
 - three violations in 60 seconds: version becomes degraded;
-- gateway restart: load route, exact module version, latest snapshot, then replay
-  later generic lifecycle/command events.
+- gateway restart: load route and persistent roster, exact module version,
+  latest snapshot, then replay later generic command events.
 
 All queues are bounded, room processing is sequential, and network writers never
 own authoritative room state.

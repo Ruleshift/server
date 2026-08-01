@@ -30,11 +30,16 @@ client, err := ruleshift.NewClient(baseURL, developerKey, nil)
 module, err := client.CreateRuntimeModule(ctx, "my_game", "My Game")
 version, err := client.PublishModuleVersion(ctx, publishRequest)
 status, err := client.GetValidationStatus(ctx, module.Key, version.Ref.Version)
-room, err := client.CreateRoom(ctx, ruleshift.CreateRoomRequest{ModuleID: module.Key})
+room, err := client.CreateRoom(ctx, ruleshift.CreateRoomRequest{
+    ModuleID: module.Key,
+    PlayerCount: 2,
+})
 ```
 
 `CreateRoom` returns a six-character `invite_code` using `0-9A-Z` and an
-`invite_deadline` exactly 24 hours after `created_at`.
+`invite_deadline` exactly 24 hours after `created_at`. `PlayerCount` must be
+between the module manifest's `min_players` and `max_players`; zero/omitted
+defaults to `max_players`.
 
 Optional declarative module tables are accessed with `CreateRow` and `ListRows`.
 Ruleshift never returns PostgreSQL credentials or accepts arbitrary SQL.

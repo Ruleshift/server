@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/Ruleshift/server/internal/module"
-	modulev1 "github.com/Ruleshift/server/internal/moduleruntime/generated/moduleruntimev1"
+	modulev2 "github.com/Ruleshift/server/internal/moduleruntime/generated/moduleruntimev2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -55,7 +55,7 @@ func runtimeFor(connection *grpc.ClientConn, endpoint Endpoint) (module.Runtime,
 		commands[value] = struct{}{}
 	}
 	return module.NewGRPCClient(
-		modulev1.NewModuleRuntimeClient(connection),
+		modulev2.NewModuleRuntimeClient(connection),
 		module.GRPCClientConfig{
 			StateTypeURL:       endpoint.StateTypeURL,
 			CommandTypeURLs:    commands,

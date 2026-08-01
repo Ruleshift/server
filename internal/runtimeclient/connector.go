@@ -7,7 +7,7 @@ import (
 
 	"github.com/Ruleshift/server/internal/controlplane"
 	"github.com/Ruleshift/server/internal/module"
-	modulev1 "github.com/Ruleshift/server/internal/moduleruntime/generated/moduleruntimev1"
+	modulev2 "github.com/Ruleshift/server/internal/moduleruntime/generated/moduleruntimev2"
 	"google.golang.org/grpc"
 )
 
@@ -30,7 +30,7 @@ func (Connector) Connect(ctx context.Context, deployment controlplane.RuntimeDep
 		_ = connection.Close()
 		return nil, controlplane.Description{}, err
 	}
-	response, err := modulev1.NewModuleRuntimeClient(connection).Describe(ctx, &modulev1.DescribeRequest{}, grpc.WaitForReady(true))
+	response, err := modulev2.NewModuleRuntimeClient(connection).Describe(ctx, &modulev2.DescribeRequest{}, grpc.WaitForReady(true))
 	if err != nil {
 		_ = connection.Close()
 		return nil, controlplane.Description{}, err
@@ -38,14 +38,13 @@ func (Connector) Connect(ctx context.Context, deployment controlplane.RuntimeDep
 	return runtime, descriptionFrom(response), nil
 }
 
-func descriptionFrom(response *modulev1.DescribeResponse) controlplane.Description {
+func descriptionFrom(response *modulev2.DescribeResponse) controlplane.Description {
 	return controlplane.Description{
-		ModuleID:           response.ModuleId,
-		Version:            response.Version,
-		ABIVersion:         response.AbiVersion,
-		StateTypeURL:       response.StateTypeUrl,
-		CommandTypeURLs:    append([]string(nil), response.CommandTypeUrls...),
-		DescriptorDigest:   "sha256:" + hex.EncodeToString(response.DescriptorSetSha256),
-		SupportsPlayerLeft: response.SupportsPlayerLeft,
+		ModuleID:         response.ModuleId,
+		Version:          response.Version,
+		ABIVersion:       response.AbiVersion,
+		StateTypeURL:     response.StateTypeUrl,
+		CommandTypeURLs:  append([]string(nil), response.CommandTypeUrls...),
+		DescriptorDigest: "sha256:" + hex.EncodeToString(response.DescriptorSetSha256),
 	}
 }

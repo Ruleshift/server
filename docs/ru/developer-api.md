@@ -30,11 +30,16 @@ client, err := ruleshift.NewClient(baseURL, developerKey, nil)
 module, err := client.CreateRuntimeModule(ctx, "my_game", "My Game")
 version, err := client.PublishModuleVersion(ctx, publishRequest)
 status, err := client.GetValidationStatus(ctx, module.Key, version.Ref.Version)
-room, err := client.CreateRoom(ctx, ruleshift.CreateRoomRequest{ModuleID: module.Key})
+room, err := client.CreateRoom(ctx, ruleshift.CreateRoomRequest{
+    ModuleID: module.Key,
+    PlayerCount: 2,
+})
 ```
 
 `CreateRoom` возвращает шестисимвольный `invite_code` из `0-9A-Z` и
-`invite_deadline`, равный ровно 24 часам после `created_at`.
+`invite_deadline`, равный ровно 24 часам после `created_at`. `PlayerCount`
+должен находиться между `min_players` и `max_players` manifest; ноль или
+отсутствующее поле означает `max_players`.
 
 Optional декларативные таблицы модуля доступны через `CreateRow` и `ListRows`.
 Ruleshift никогда не возвращает PostgreSQL credentials и не принимает

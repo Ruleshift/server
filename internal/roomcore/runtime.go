@@ -2,8 +2,6 @@ package roomcore
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -48,7 +46,7 @@ type Runtime struct {
 	roomID    string
 	moduleID  string
 	version   string
-	status    string
+	status    atomic.Value
 	createdAt time.Time
 	revision  atomic.Uint64
 	updatedAt atomic.Int64
@@ -60,6 +58,9 @@ func Create(ctx context.Context, route Route, cfg RuntimeConfig) (*Runtime, erro
 	}
 	if err := route.Module.Validate(); err != nil {
 		return nil, err
+	}
+	if route.PlayerCount == 0 || route.PlayerCount > module.MaxPlayers {
+		return nil, fmt.Errorf("room player_count must be between 1 and %d", module.MaxPlayers)
 	}
 	if cfg.Store == nil || cfg.Module == nil {
 		return nil, fmt.Errorf("room store and module runtime are required")
@@ -80,14 +81,14 @@ func Create(ctx context.Context, route Route, cfg RuntimeConfig) (*Runtime, erro
 		}
 		route.InviteDeadline = route.CreatedAt.Add(InviteCodeTTL)
 	}
-	transition, err := cfg.Module.NewState(ctx, operation(route, 0, now))
+	transition, err := cfg.Module.CreateState(ctx, operation(route, 0, now), module.GameSetup{PlayerCount: route.PlayerCount})
 	if err != nil {
 		return nil, err
 	}
 	if !transition.Changed {
-		return nil, fmt.Errorf("%w: NewState returned changed=false", module.ErrProtocolViolation)
+		return nil, fmt.Errorf("%w: CreateState returned changed=false", module.ErrProtocolViolation)
 	}
-	state := State{Route: route, Opaque: transition.NextState, Status: "active", CreatedAt: route.CreatedAt, UpdatedAt: now}
+	state := State{Route: route, Opaque: transition.NextState, Status: StatusLobby, CreatedAt: route.CreatedAt, UpdatedAt: now}
 	event := Event{RoomID: route.RoomID, Kind: EventRoomCreated, Delta: transition.Delta, StateDigest: state.Opaque.Digest, OccurredAt: now}
 	snapshot := Snapshot{RoomID: route.RoomID, State: state.Opaque, SavedAt: now}
 	if err := cfg.Store.Create(ctx, state, event, snapshot); err != nil {
@@ -123,7 +124,11 @@ func Restore(ctx context.Context, route Route, cfg RuntimeConfig) (*Runtime, err
 	if snapshot == nil {
 		return nil, fmt.Errorf("room %q has no snapshot", route.RoomID)
 	}
-	state := State{Route: route, Revision: snapshot.Revision, Opaque: snapshot.State, Status: "active", CreatedAt: route.CreatedAt, UpdatedAt: snapshot.SavedAt}
+	status, participants, err := cfg.Store.LoadMembership(ctx, route.RoomID)
+	if err != nil {
+		return nil, err
+	}
+	state := State{Route: route, Revision: snapshot.Revision, Opaque: snapshot.State, Status: status, Participants: participants, CreatedAt: route.CreatedAt, UpdatedAt: snapshot.SavedAt}
 	for _, event := range events {
 		if event.PreviousRevision != state.Revision {
 			return nil, fmt.Errorf("event %d has discontinuous revision", event.Sequence)
@@ -153,7 +158,8 @@ func newRuntime(state State, cfg RuntimeConfig) *Runtime {
 	if observer == nil {
 		observer = metrics.NopRecorder{}
 	}
-	runtime := &Runtime{state: state, store: cfg.Store, module: cfg.Module, clock: clock, input: make(chan request, queueSize), done: make(chan struct{}), metrics: observer, roomID: state.Route.RoomID, moduleID: state.Route.Module.ModuleID, version: state.Route.Module.Version, status: state.Status, createdAt: state.CreatedAt}
+	runtime := &Runtime{state: state, store: cfg.Store, module: cfg.Module, clock: clock, input: make(chan request, queueSize), done: make(chan struct{}), metrics: observer, roomID: state.Route.RoomID, moduleID: state.Route.Module.ModuleID, version: state.Route.Module.Version, createdAt: state.CreatedAt}
+	runtime.status.Store(state.Status)
 	runtime.revision.Store(state.Revision)
 	runtime.updatedAt.Store(state.UpdatedAt.UnixMilli())
 	return runtime
@@ -193,63 +199,69 @@ func (r *Runtime) State(ctx context.Context) (State, error) {
 	return value.(State), nil
 }
 
-func (r *Runtime) Join(ctx context.Context, viewer module.Viewer) (SnapshotView, *DeltaView, error) {
+func (r *Runtime) Join(ctx context.Context, playerID string, spectator bool, scope module.ViewScope) (SnapshotView, module.Viewer, error) {
 	value, err := r.submit(ctx, "join", func(callCtx context.Context) (any, error) {
-		var delta *DeltaView
-		if viewer.JoinMode == module.JoinModePlayer {
-			before := r.state
-			transition, callErr := r.module.PlayerJoined(callCtx, operation(r.state.Route, r.state.Revision, r.clock()), r.state.Opaque, viewer.PlayerID)
-			if callErr != nil {
-				return nil, callErr
-			}
-			if transition.Changed {
-				if callErr = r.commit(callCtx, before, transition, EventPlayerJoined, viewer.PlayerID, module.OpaqueState{}); callErr != nil {
-					return nil, callErr
+		if playerID == "" {
+			return nil, fmt.Errorf("player id must not be empty")
+		}
+		viewer := module.Viewer{PlayerID: playerID, Scope: scope}
+		if !spectator {
+			participant, found := participantByPlayerID(r.state.Participants, playerID)
+			if !found {
+				if r.state.Status != StatusLobby || len(r.state.Participants) >= int(r.state.Route.PlayerCount) {
+					return nil, ErrRoomFull
 				}
-				projected, projectErr := r.projectDelta(callCtx, before, transition.Delta, viewer.PlayerID, viewer)
-				if projectErr != nil {
-					return nil, projectErr
+				next := cloneState(r.state)
+				participant = Participant{PlayerID: playerID, SeatIndex: lowestFreeSeat(next.Participants), JoinedAt: r.clock()}
+				next.Participants = append(next.Participants, participant)
+				if len(next.Participants) == int(next.Route.PlayerCount) {
+					next.Status = StatusActive
 				}
-				delta = &projected
+				next.UpdatedAt = r.clock()
+				if err := r.store.SaveMembership(callCtx, next); err != nil {
+					return nil, err
+				}
+				r.state = next
+				r.status.Store(next.Status)
+				r.updatedAt.Store(next.UpdatedAt.UnixMilli())
 			}
+			viewer.Seated = true
+			viewer.SeatIndex = participant.SeatIndex
 		}
 		snapshot, callErr := r.snapshot(callCtx, viewer)
 		return struct {
 			Snapshot SnapshotView
-			Delta    *DeltaView
-		}{snapshot, delta}, callErr
+			Viewer   module.Viewer
+		}{snapshot, viewer}, callErr
 	})
 	if err != nil {
-		return SnapshotView{}, nil, err
+		return SnapshotView{}, module.Viewer{}, err
 	}
 	response := value.(struct {
 		Snapshot SnapshotView
-		Delta    *DeltaView
+		Viewer   module.Viewer
 	})
-	return response.Snapshot, response.Delta, nil
+	return response.Snapshot, response.Viewer, nil
 }
 
 func (r *Runtime) Leave(ctx context.Context, viewer module.Viewer) (*DeltaView, error) {
 	value, err := r.submit(ctx, "leave", func(callCtx context.Context) (any, error) {
-		if viewer.JoinMode != module.JoinModePlayer {
+		if !viewer.Seated || r.state.Status != StatusLobby {
 			return (*DeltaView)(nil), nil
 		}
-		before := r.state
-		transition, callErr := r.module.PlayerLeft(callCtx, operation(r.state.Route, r.state.Revision, r.clock()), r.state.Opaque, viewer.PlayerID)
-		if callErr != nil {
-			return nil, callErr
-		}
-		if !transition.Changed {
+		_, found := participantByPlayerID(r.state.Participants, viewer.PlayerID)
+		if !found {
 			return (*DeltaView)(nil), nil
 		}
-		if callErr = r.commit(callCtx, before, transition, EventPlayerLeft, viewer.PlayerID, module.OpaqueState{}); callErr != nil {
-			return nil, callErr
+		next := cloneState(r.state)
+		next.Participants = removeParticipant(next.Participants, viewer.PlayerID)
+		next.UpdatedAt = r.clock()
+		if err := r.store.SaveMembership(callCtx, next); err != nil {
+			return nil, err
 		}
-		projected, callErr := r.projectDelta(callCtx, before, transition.Delta, viewer.PlayerID, viewer)
-		if callErr != nil {
-			return nil, callErr
-		}
-		return &projected, nil
+		r.state = next
+		r.updatedAt.Store(next.UpdatedAt.UnixMilli())
+		return (*DeltaView)(nil), nil
 	})
 	if err != nil {
 		return nil, err
@@ -268,8 +280,16 @@ func (r *Runtime) Apply(ctx context.Context, command Command, viewers []module.V
 		if command.ExpectedRevision != 0 && command.ExpectedRevision != r.state.Revision {
 			return nil, ErrRevisionMismatch
 		}
+		if r.state.Status != StatusActive {
+			return nil, fmt.Errorf("%w: %w", module.ErrCommandRejected, ErrMatchNotReady)
+		}
+		participant, found := participantByPlayerID(r.state.Participants, command.PlayerID)
+		if !found {
+			return nil, fmt.Errorf("%w: %w", module.ErrCommandRejected, ErrPlayerNotSeated)
+		}
 		before := r.state
-		transition, callErr := r.module.Apply(callCtx, operation(r.state.Route, r.state.Revision, r.clock()), r.state.Opaque, command.PlayerID, command.Payload)
+		actor := module.Actor{PlayerID: participant.PlayerID, SeatIndex: participant.SeatIndex}
+		transition, callErr := r.module.Apply(callCtx, operation(r.state.Route, r.state.Revision, r.clock()), r.state.Opaque, actor, command.Payload)
 		if callErr != nil {
 			return nil, callErr
 		}
@@ -353,7 +373,7 @@ func (r *Runtime) snapshot(ctx context.Context, viewer module.Viewer) (SnapshotV
 	if err != nil {
 		return SnapshotView{}, err
 	}
-	return SnapshotView{RoomID: r.state.Route.RoomID, Revision: r.state.Revision, Module: r.state.Route.Module, View: projection.Payload}, nil
+	return SnapshotView{RoomID: r.state.Route.RoomID, Revision: r.state.Revision, Status: r.state.Status, Module: r.state.Route.Module, View: projection.Payload}, nil
 }
 
 func (r *Runtime) projectDelta(ctx context.Context, before State, delta module.OpaqueState, changedBy string, viewer module.Viewer) (DeltaView, error) {
@@ -364,29 +384,57 @@ func (r *Runtime) projectDelta(ctx context.Context, before State, delta module.O
 	return DeltaView{RoomID: r.state.Route.RoomID, PreviousRevision: before.Revision, NewRevision: r.state.Revision, ChangedBy: changedBy, Module: r.state.Route.Module, View: projection.Payload, NoVisibleChange: projection.NoVisibleChange}, nil
 }
 
-func operation(route Route, revision uint64, now time.Time) module.Operation {
-	return module.Operation{OperationID: newOperationID(), RoomID: route.RoomID, Revision: revision, Now: now, Seed: route.Seed}
-}
-func newOperationID() string {
-	var value [16]byte
-	if _, err := rand.Read(value[:]); err != nil {
-		return fmt.Sprintf("fallback-%d", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(value[:])
+func operation(route Route, revision uint64, now time.Time) module.DeterministicContext {
+	return module.DeterministicContext{Revision: revision, Now: now, Seed: route.Seed}
 }
 
 func replayTransition(ctx context.Context, runtime module.Runtime, state State, event Event) (module.Transition, error) {
 	op := operation(state.Route, state.Revision, event.OccurredAt)
 	switch event.Kind {
-	case EventPlayerJoined:
-		return runtime.PlayerJoined(ctx, op, state.Opaque, event.PlayerID)
-	case EventPlayerLeft:
-		return runtime.PlayerLeft(ctx, op, state.Opaque, event.PlayerID)
 	case EventCommandApplied:
-		return runtime.Apply(ctx, op, state.Opaque, event.PlayerID, event.Input)
+		participant, found := participantByPlayerID(state.Participants, event.PlayerID)
+		if !found {
+			return module.Transition{}, fmt.Errorf("replay actor %q is not seated", event.PlayerID)
+		}
+		return runtime.Apply(ctx, op, state.Opaque, module.Actor{PlayerID: participant.PlayerID, SeatIndex: participant.SeatIndex}, event.Input)
 	default:
 		return module.Transition{}, errors.New("unsupported replay event")
 	}
+}
+
+func participantByPlayerID(values []Participant, playerID string) (Participant, bool) {
+	for _, value := range values {
+		if value.PlayerID == playerID {
+			return value, true
+		}
+	}
+	return Participant{}, false
+}
+
+func lowestFreeSeat(values []Participant) uint32 {
+	for seat := uint32(0); seat < module.MaxPlayers; seat++ {
+		used := false
+		for _, value := range values {
+			if value.SeatIndex == seat {
+				used = true
+				break
+			}
+		}
+		if !used {
+			return seat
+		}
+	}
+	return module.MaxPlayers
+}
+
+func removeParticipant(values []Participant, playerID string) []Participant {
+	result := make([]Participant, 0, len(values))
+	for _, value := range values {
+		if value.PlayerID != playerID {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func metricResult(err error) string {

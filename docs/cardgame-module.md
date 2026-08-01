@@ -1,24 +1,24 @@
 # Card Game as a protocol v2 module
 
 Card Game no longer runs inside Ruleshift core. Its external OCI example is in
-`examples/modules/cardgame` and implements Module Runtime ABI v1.
+`examples/modules/cardgame` and implements Module Runtime ABI v2.
 
 The image supports:
 
-- a host-controlled lobby for 2–6 players;
+- an immutable 2–6 seat setup supplied by Ruleshift Core;
 - deterministic deck creation from the Ruleshift room seed;
 - private hands for player scope;
 - public hand counts for spectators;
 - complete hands for trusted full scope;
 - `start`, `play_card`, `attach_modifier`, and `end_turn` commands;
-- player join/leave lifecycle and deterministic conformance vectors.
+- seat-based authenticated actors and deterministic conformance vectors.
 
 Build it from the repository root:
 
 ```powershell
 docker build -f examples/modules/cardgame/Dockerfile `
-  -t registry.example.com/cardgame:1.0.0 .
-docker push registry.example.com/cardgame:1.0.0
+  -t registry.example.com/cardgame:2.0.0 .
+docker push registry.example.com/cardgame:2.0.0
 ```
 
 Publish the resulting `registry.example.com/cardgame@sha256:...` together with:

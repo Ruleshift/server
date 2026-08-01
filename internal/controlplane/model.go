@@ -47,6 +47,8 @@ type Manifest struct {
 	ModuleID             string              `json:"module_id"`
 	Version              string              `json:"version"`
 	ABIVersion           uint32              `json:"abi_version"`
+	MinPlayers           uint32              `json:"min_players"`
+	MaxPlayers           uint32              `json:"max_players"`
 	StateTypeURL         string              `json:"state_type_url"`
 	CommandTypeURLs      []string            `json:"command_type_urls"`
 	TransitionDeadlineMS int                 `json:"transition_deadline_ms,omitempty"`
@@ -131,6 +133,9 @@ func (r PublishRequest) Validate() error {
 	if r.Manifest.ABIVersion != module.ABIVersion {
 		return fmt.Errorf("unsupported module ABI %d", r.Manifest.ABIVersion)
 	}
+	if r.Manifest.MinPlayers == 0 || r.Manifest.MaxPlayers < r.Manifest.MinPlayers || r.Manifest.MaxPlayers > module.MaxPlayers {
+		return fmt.Errorf("min_players and max_players must satisfy 1 <= min_players <= max_players <= %d", module.MaxPlayers)
+	}
 	if !digestReferencePattern.MatchString(r.ImageRef) {
 		return fmt.Errorf("OCI image reference must contain @sha256:<64 lowercase hex>")
 	}
@@ -172,7 +177,7 @@ func (r PublishRequest) Validate() error {
 }
 
 func isReservedTypeURL(value string) bool {
-	for _, prefix := range []string{"type.googleapis.com/ruleshift.v1.", "type.googleapis.com/ruleshift.v2.", "type.googleapis.com/ruleshift.module.v1."} {
+	for _, prefix := range []string{"type.googleapis.com/ruleshift.v1.", "type.googleapis.com/ruleshift.v2.", "type.googleapis.com/ruleshift.module."} {
 		if strings.HasPrefix(value, prefix) {
 			return true
 		}
@@ -191,7 +196,7 @@ func validateDescriptorSet(raw []byte, manifest Manifest) error {
 	types := map[string]struct{}{}
 	for _, file := range set.File {
 		pkg := file.GetPackage()
-		if pkg == "ruleshift.v1" || pkg == "ruleshift.v2" || pkg == "ruleshift.module.v1" {
+		if pkg == "ruleshift.v1" || pkg == "ruleshift.v2" || strings.HasPrefix(pkg, "ruleshift.module.") {
 			return fmt.Errorf("descriptor package %q conflicts with Ruleshift core", pkg)
 		}
 		for _, message := range file.MessageType {

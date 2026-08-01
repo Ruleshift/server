@@ -8,6 +8,12 @@ Ruleshift хранит состояние комнаты, ревизии, event 
 получает текущее protobuf-состояние и возвращает следующее. Клиент никогда не
 присылает готовое состояние.
 
+Процесс модуля не хранит текущие матчи и не реализует комнаты, lobby, Join,
+Leave или reconnect. Состав игроков и устойчивое соответствие
+`player_id <-> seat_index` принадлежат Ruleshift Core. Внутри передаваемого
+canonical state игра может хранить данные мест, ход, карты и другие игровые
+данные; сами bytes всегда хранятся в комнате, а не в процессе модуля.
+
 ```text
 player command -> Ruleshift room queue -> ModuleRuntime.Apply
                                       <- next_state + delta
@@ -27,14 +33,12 @@ Developer API key нельзя включать в player build.
 ## 2. Подключите ABI
 
 Скопируйте `internal/moduleruntime/proto/module_runtime.proto` в свой репозиторий
-или подключите опубликованный ABI package. ABI v1 содержит сервис:
+или подключите опубликованный ABI package. ABI v2 содержит сервис:
 
 ```proto
 service ModuleRuntime {
   rpc Describe(DescribeRequest) returns (DescribeResponse);
-  rpc NewState(NewStateRequest) returns (TransitionResponse);
-  rpc PlayerJoined(PlayerTransitionRequest) returns (TransitionResponse);
-  rpc PlayerLeft(PlayerTransitionRequest) returns (TransitionResponse);
+  rpc CreateState(CreateStateRequest) returns (TransitionResponse);
   rpc Apply(ApplyRequest) returns (TransitionResponse);
   rpc ProjectSnapshot(ProjectRequest) returns (ProjectionResponse);
   rpc ProjectDelta(ProjectDeltaRequest) returns (ProjectionResponse);
@@ -56,19 +60,19 @@ syntax = "proto3";
 package acme.mygame.v1;
 
 message State {
-  repeated Player players = 1;
-  uint32 turn = 2;
+  repeated Seat seats = 1;
+  uint32 turn_seat = 2;
 }
 
-message Player {
-  string player_id = 1;
+message Seat {
+  uint32 seat_index = 1;
   int64 private_score = 2;
 }
 
 message PlayCommand { uint32 cell = 1; }
 
 message Delta {
-  string player_id = 1;
+  uint32 seat_index = 1;
   uint32 cell = 2;
 }
 
@@ -102,21 +106,21 @@ protoc -I . --include_imports --descriptor_set_out=descriptor.pb proto/mygame.pr
 Псевдокод `Apply`:
 
 ```go
-func (s *Server) Apply(ctx context.Context, req *modulev1.ApplyRequest) (*modulev1.TransitionResponse, error) {
+func (s *Server) Apply(ctx context.Context, req *modulev2.ApplyRequest) (*modulev2.TransitionResponse, error) {
     current := unpackState(req.State)
     command := unpackPlayCommand(req.Command)
 
-    if !current.IsPlayersTurn(req.PlayerId) {
+    if req.Actor == nil || !current.IsSeatsTurn(req.Actor.SeatIndex) {
         return nil, status.Error(codes.FailedPrecondition, "not player's turn")
     }
 
     next := current.Clone()
-    delta, err := next.Play(req.PlayerId, command.Cell)
+    delta, err := next.Play(req.Actor.SeatIndex, command.Cell)
     if err != nil {
         return nil, status.Error(codes.InvalidArgument, err.Error())
     }
 
-    return &modulev1.TransitionResponse{
+    return &modulev2.TransitionResponse{
         Changed:   true,
         NextState: pack(next),
         Delta:     pack(delta),
@@ -127,12 +131,12 @@ func (s *Server) Apply(ctx context.Context, req *modulev1.ApplyRequest) (*module
 Обязательные свойства:
 
 - одинаковый запрос даёт byte-for-byte одинаковый ответ;
-- случайность берётся только из `RoomContext.seed`;
-- время берётся только из `RoomContext.now_unix_ms`;
-- `player_id` берётся из запроса Ruleshift и считается authenticated;
+- случайность берётся только из `DeterministicContext.seed` и canonical state;
+- время берётся только из `DeterministicContext.now_unix_ms`;
+- `Actor.player_id` и `Actor.seat_index` берутся из запроса Ruleshift и считаются authenticated;
 - внешние side effects запрещены;
 - БД, filesystem mounts и внешний network модулю недоступны;
-- `operation_id` сохранять не нужно: side effects всё равно запрещены.
+- модуль не получает `room_id` или `operation_id`.
 
 Ошибка или timeout не изменяют состояние и revision комнаты. Ожидаемые ошибки
 команды возвращайте через `InvalidArgument`, `FailedPrecondition` или
@@ -143,13 +147,14 @@ func (s *Server) Apply(ctx context.Context, req *modulev1.ApplyRequest) (*module
 Canonical state никогда не отправляется игроку напрямую. `ProjectSnapshot` и
 `ProjectDelta` получают `Viewer`:
 
-| mode/scope | Назначение |
-| --- | --- |
-| player/player | приватный view конкретного игрока |
-| spectator/public | публичная трансляция без секретов |
-| spectator/full | trusted observer с полным view |
+| scope | seat_index | Назначение |
+| --- | --- | --- |
+| player | есть | приватный view конкретного места |
+| public | нет | публичная трансляция без секретов |
+| full | optional | trusted observer с полным view |
 
-Не полагайтесь только на `player_id`: проверяйте scope. Для невидимого изменения
+Для приватной информации проверяйте одновременно scope и `seat_index`, а не
+доверяйте полям команды клиента. Для невидимого изменения
 верните `no_visible_change = true` и валидный protobuf payload. Ruleshift считает
 SHA-256 каждого view и помещает его в player protocol.
 
@@ -162,7 +167,7 @@ SHA-256 каждого view и помещает его в player protocol.
 | delta | 256 KiB |
 | projected view | 256 KiB |
 
-Стандартный transition deadline — 50 ms, `NewState` — 250 ms. Manifest может
+Стандартный transition deadline — 50 ms, `CreateState` — 250 ms. Manifest может
 уменьшить deadline или поднять transition deadline до 250 ms. Ruleshift делает
 не больше одного retry и только для gRPC `Unavailable`, внутри исходного
 deadline.
@@ -172,14 +177,13 @@ deadline.
 `Describe` должен точно совпасть с manifest:
 
 ```go
-return &modulev1.DescribeResponse{
+return &modulev2.DescribeResponse{
     ModuleId:            "mygame",
     Version:             "1.0.0",
-    AbiVersion:          1,
+    AbiVersion:          2,
     StateTypeUrl:        "type.googleapis.com/acme.mygame.v1.State",
     CommandTypeUrls:     []string{"type.googleapis.com/acme.mygame.v1.PlayCommand"},
     DescriptorSetSha256: descriptorSHA256,
-    SupportsPlayerLeft:  true,
 }
 ```
 
@@ -193,14 +197,15 @@ return &modulev1.DescribeResponse{
 {
   "module_id": "mygame",
   "version": "1.0.0",
-  "abi_version": 1,
+  "abi_version": 2,
+  "min_players": 2,
+  "max_players": 4,
   "state_type_url": "type.googleapis.com/acme.mygame.v1.State",
   "command_type_urls": [
     "type.googleapis.com/acme.mygame.v1.PlayCommand"
   ],
   "transition_deadline_ms": 75,
   "capabilities": [
-    "player_lifecycle",
     "private_projection",
     "public_projection"
   ]
@@ -240,26 +245,22 @@ return &modulev1.DescribeResponse{
 
 ## 10. Добавьте conformance vectors
 
-Vectors обязательны. Они должны содержать initial state, joins, минимум одну
-последовательность команд и private/public projections. Для каждого результата
+Vectors обязательны. Они должны содержать `player_count`, initial state, минимум
+одну команду с проверенными `player_id`/`seat_index` и private/public
+projections. Для каждого результата
 указывается SHA-256 serialized protobuf bytes.
 
 ```json
 {
-  "room_id": "conformance-room",
   "seed": 42,
   "now_unix_ms": 1700000000000,
+  "player_count": 2,
   "initial_state_sha256": "...64 hex...",
   "steps": [
     {
-      "kind": "join",
-      "player_id": "p1",
-      "expected_state_sha256": "...",
-      "expected_delta_sha256": "..."
-    },
-    {
       "kind": "command",
       "player_id": "p1",
+      "seat_index": 0,
       "type_url": "type.googleapis.com/acme.mygame.v1.PlayCommand",
       "payload_base64": "CAc=",
       "expected_state_sha256": "...",
@@ -267,8 +268,8 @@ Vectors обязательны. Они должны содержать initial s
     }
   ],
   "projections": [
-    {"player_id":"p1","join_mode":"player","scope":"player","expected_view_sha256":"..."},
-    {"player_id":"viewer","join_mode":"spectator","scope":"public","expected_view_sha256":"..."}
+    {"player_id":"p1","seat_index":0,"scope":"player","expected_view_sha256":"..."},
+    {"player_id":"viewer","scope":"public","expected_view_sha256":"..."}
   ]
 }
 ```
@@ -343,8 +344,14 @@ Lifecycle: `validating -> active` или `validating -> failed`. Успешна�
 $room = Invoke-RestMethod -Method Post `
   -Uri "$env:RULESHIFT_URL/v2/rooms" `
   -Headers $headers -ContentType application/json `
-  -Body '{"module_id":"mygame"}'
+  -Body '{"module_id":"mygame","player_count":2}'
 ```
+
+Если `player_count` не указан, используется `max_players` из manifest. Значение
+должно находиться между `min_players` и `max_players`. Ruleshift создаёт
+canonical state сразу, но держит комнату в `lobby` и не передаёт команды в
+модуль, пока все места не заняты. До старта отключение освобождает место; после
+перехода в `active` место сохраняется для reconnect.
 
 Без `version` выбирается active version. Можно явно указать healthy active или
 inactive version. Комната навсегда закрепляется за developer/module/version/image
@@ -361,7 +368,7 @@ Player WebSocket endpoint: `/v2/ws`. Все frames — binary protobuf
 4. отправьте `GameCommand` с `expected_revision`;
 5. распаковывайте snapshot/delta по type URL descriptor модуля.
 
-Protocol v1 намеренно не поддерживается.
+Player WebSocket protocol v1 намеренно не поддерживается.
 
 ## 16. Готовые примеры
 

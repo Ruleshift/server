@@ -25,11 +25,12 @@ func (r *Runtime) Diagnostic() Diagnostic {
 	if capacity > 0 {
 		ratio = float64(depth) / float64(capacity)
 	}
+	status, _ := r.status.Load().(string)
 	return Diagnostic{
 		RoomID:          r.roomID,
 		ModuleID:        r.moduleID,
 		Version:         r.version,
-		Status:          r.status,
+		Status:          status,
 		Revision:        r.revision.Load(),
 		CreatedAt:       r.createdAt,
 		UpdatedAt:       time.UnixMilli(r.updatedAt.Load()).UTC(),

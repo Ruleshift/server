@@ -32,27 +32,19 @@ func (r *trackingRuntime) track(ctx context.Context, err error) error {
 	}
 	return err
 }
-func (r *trackingRuntime) NewState(ctx context.Context, op module.Operation) (module.Transition, error) {
-	v, e := r.Runtime.NewState(ctx, op)
+func (r *trackingRuntime) CreateState(ctx context.Context, op module.DeterministicContext, setup module.GameSetup) (module.Transition, error) {
+	v, e := r.Runtime.CreateState(ctx, op, setup)
 	return v, r.track(ctx, e)
 }
-func (r *trackingRuntime) PlayerJoined(ctx context.Context, op module.Operation, s module.OpaqueState, p string) (module.Transition, error) {
-	v, e := r.Runtime.PlayerJoined(ctx, op, s, p)
+func (r *trackingRuntime) Apply(ctx context.Context, op module.DeterministicContext, s module.OpaqueState, actor module.Actor, c module.OpaqueState) (module.Transition, error) {
+	v, e := r.Runtime.Apply(ctx, op, s, actor, c)
 	return v, r.track(ctx, e)
 }
-func (r *trackingRuntime) PlayerLeft(ctx context.Context, op module.Operation, s module.OpaqueState, p string) (module.Transition, error) {
-	v, e := r.Runtime.PlayerLeft(ctx, op, s, p)
-	return v, r.track(ctx, e)
-}
-func (r *trackingRuntime) Apply(ctx context.Context, op module.Operation, s module.OpaqueState, p string, c module.OpaqueState) (module.Transition, error) {
-	v, e := r.Runtime.Apply(ctx, op, s, p, c)
-	return v, r.track(ctx, e)
-}
-func (r *trackingRuntime) ProjectSnapshot(ctx context.Context, op module.Operation, s module.OpaqueState, v module.Viewer) (module.Projection, error) {
+func (r *trackingRuntime) ProjectSnapshot(ctx context.Context, op module.DeterministicContext, s module.OpaqueState, v module.Viewer) (module.Projection, error) {
 	result, e := r.Runtime.ProjectSnapshot(ctx, op, s, v)
 	return result, r.track(ctx, e)
 }
-func (r *trackingRuntime) ProjectDelta(ctx context.Context, op module.Operation, b, a, d module.OpaqueState, v module.Viewer) (module.Projection, error) {
+func (r *trackingRuntime) ProjectDelta(ctx context.Context, op module.DeterministicContext, b, a, d module.OpaqueState, v module.Viewer) (module.Projection, error) {
 	result, e := r.Runtime.ProjectDelta(ctx, op, b, a, d, v)
 	return result, r.track(ctx, e)
 }

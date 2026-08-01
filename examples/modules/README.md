@@ -4,9 +4,9 @@ Each directory is an independently buildable OCI image. Build from the server
 repository root so the shared ABI implementation is available:
 
 ```bash
-docker build -f examples/modules/hiddennumber/Dockerfile -t localhost:5000/hiddennumber:1.0.0 .
-docker push localhost:5000/hiddennumber:1.0.0
-docker inspect --format='{{index .RepoDigests 0}}' localhost:5000/hiddennumber:1.0.0
+docker build -f examples/modules/hiddennumber/Dockerfile -t localhost:5000/hiddennumber:2.0.0 .
+docker push localhost:5000/hiddennumber:2.0.0
+docker inspect --format='{{index .RepoDigests 0}}' localhost:5000/hiddennumber:2.0.0
 ```
 
 From PowerShell, the complete build, push, Developer API publication and
@@ -36,5 +36,11 @@ gRPC services and no Ruleshift core package imports them.
 
 - `xiangqi`: two-player board-state and public projections;
 - `hiddennumber`: player-private, public, and trusted full projections;
-- `cardgame`: lobby lifecycle, deterministic deck, private hands, public hand
-  counts, trusted full view, play/end-turn/modifier commands.
+- `cardgame`: fixed seat setup, deterministic deck, private hands, public hand
+  counts, trusted full view, and seat-authenticated play/end-turn/modifier
+  commands.
+
+All examples implement Module Runtime ABI v2. Their processes keep no
+room-to-state map and receive the canonical state on every call. Ruleshift Core,
+not the module, owns room membership, lobby/active status, seat assignment,
+disconnect, and reconnect behavior.

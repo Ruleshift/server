@@ -13,7 +13,7 @@ func validPublish() PublishRequest {
 	pkg, name, syntax := "example.sample", "sample.proto", "proto3"
 	stateName, commandName := "State", "Command"
 	descriptor, _ := proto.Marshal(&descriptorpb.FileDescriptorSet{File: []*descriptorpb.FileDescriptorProto{{Name: &name, Package: &pkg, Syntax: &syntax, MessageType: []*descriptorpb.DescriptorProto{{Name: &stateName}, {Name: &commandName}}}}})
-	return PublishRequest{DeveloperID: "dev", ModuleID: "sample", ImageRef: "registry.example/sample@sha256:" + strings.Repeat("a", 64), Manifest: Manifest{ModuleID: "sample", Version: "1.2.3", ABIVersion: 1, StateTypeURL: "type.googleapis.com/example.sample.State", CommandTypeURLs: []string{"type.googleapis.com/example.sample.Command"}}, DescriptorSet: descriptor, Vectors: []byte(`{"vectors":[1]}`)}
+	return PublishRequest{DeveloperID: "dev", ModuleID: "sample", ImageRef: "registry.example/sample@sha256:" + strings.Repeat("a", 64), Manifest: Manifest{ModuleID: "sample", Version: "1.2.3", ABIVersion: 2, MinPlayers: 2, MaxPlayers: 4, StateTypeURL: "type.googleapis.com/example.sample.State", CommandTypeURLs: []string{"type.googleapis.com/example.sample.Command"}}, DescriptorSet: descriptor, Vectors: []byte(`{"vectors":[1]}`)}
 }
 func TestPublishRequestRejectsTagOnlyAndReservedTypes(t *testing.T) {
 	request := validPublish()
@@ -25,6 +25,11 @@ func TestPublishRequestRejectsTagOnlyAndReservedTypes(t *testing.T) {
 	request.Manifest.StateTypeURL = "type.googleapis.com/ruleshift.v2.StateSnapshot"
 	if err := request.Validate(); err == nil {
 		t.Fatal("reserved Ruleshift type accepted")
+	}
+	request = validPublish()
+	request.Manifest.StateTypeURL = "type.googleapis.com/ruleshift.module.future.State"
+	if err := request.Validate(); err == nil {
+		t.Fatal("reserved module-runtime namespace accepted")
 	}
 }
 func TestVersionPublishIsIdempotentAndDigestConflictFails(t *testing.T) {

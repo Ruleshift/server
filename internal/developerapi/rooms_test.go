@@ -19,22 +19,16 @@ func roomTestTransition() (module.Transition, error) {
 	return module.Transition{Changed: true, NextState: state, Delta: delta}, nil
 }
 
-func (roomTestRuntime) NewState(context.Context, module.Operation) (module.Transition, error) {
+func (roomTestRuntime) CreateState(context.Context, module.DeterministicContext, module.GameSetup) (module.Transition, error) {
 	return roomTestTransition()
 }
-func (roomTestRuntime) PlayerJoined(context.Context, module.Operation, module.OpaqueState, string) (module.Transition, error) {
+func (roomTestRuntime) Apply(context.Context, module.DeterministicContext, module.OpaqueState, module.Actor, module.OpaqueState) (module.Transition, error) {
 	return roomTestTransition()
 }
-func (roomTestRuntime) PlayerLeft(context.Context, module.Operation, module.OpaqueState, string) (module.Transition, error) {
-	return roomTestTransition()
-}
-func (roomTestRuntime) Apply(context.Context, module.Operation, module.OpaqueState, string, module.OpaqueState) (module.Transition, error) {
-	return roomTestTransition()
-}
-func (roomTestRuntime) ProjectSnapshot(context.Context, module.Operation, module.OpaqueState, module.Viewer) (module.Projection, error) {
+func (roomTestRuntime) ProjectSnapshot(context.Context, module.DeterministicContext, module.OpaqueState, module.Viewer) (module.Projection, error) {
 	return module.Projection{}, nil
 }
-func (roomTestRuntime) ProjectDelta(context.Context, module.Operation, module.OpaqueState, module.OpaqueState, module.OpaqueState, module.Viewer) (module.Projection, error) {
+func (roomTestRuntime) ProjectDelta(context.Context, module.DeterministicContext, module.OpaqueState, module.OpaqueState, module.OpaqueState, module.Viewer) (module.Projection, error) {
 	return module.Projection{}, nil
 }
 
@@ -45,7 +39,10 @@ func TestCreateRoomPersistsSixCharacterInviteFor24Hours(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	version := controlplane.Version{Ref: module.ModuleRef{DeveloperID: "dev", ModuleID: "game", Version: "1.0.0", ImageDigest: "sha256:" + strings.Repeat("a", 64)}}
+	version := controlplane.Version{
+		Ref:      module.ModuleRef{DeveloperID: "dev", ModuleID: "game", Version: "1.0.0", ImageDigest: "sha256:" + strings.Repeat("a", 64)},
+		Manifest: controlplane.Manifest{MinPlayers: 2, MaxPlayers: 2},
+	}
 	if _, _, err = control.PutVersion(ctx, version); err != nil {
 		t.Fatal(err)
 	}
@@ -63,12 +60,15 @@ func TestCreateRoomPersistsSixCharacterInviteFor24Hours(t *testing.T) {
 	createdAt := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
 	manager := RoomManager{Control: control, Rooms: registry, Routes: routes, Clock: func() time.Time { return createdAt }}
 
-	route, err := manager.CreateRoom(ctx, "dev", "game", "")
+	route, err := manager.CreateRoom(ctx, "dev", "game", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(route.InviteCode) != roomcore.InviteCodeLength {
 		t.Fatalf("invite code length = %d, want %d", len(route.InviteCode), roomcore.InviteCodeLength)
+	}
+	if route.PlayerCount != 2 {
+		t.Fatalf("player_count = %d, want 2", route.PlayerCount)
 	}
 	for _, value := range route.InviteCode {
 		if !strings.ContainsRune(inviteAlphabet, value) {
