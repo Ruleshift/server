@@ -53,3 +53,49 @@ health check; post-update checks and automatic rollback remain enabled:
 SKIP_PREFLIGHT_HEALTH=1 sudo --preserve-env=SKIP_PREFLIGHT_HEALTH \
   /usr/local/sbin/ruleshift-update-gateway ghcr.io/ruleshift/server:<git-sha>
 ```
+
+## Purging module versions
+
+`scripts/purge-module-version.sh` removes selected module-version Kubernetes
+resources and database records. It is intentionally dry-run by default and
+requires `--yes` before deleting anything.
+
+Copy it from the workstation:
+
+```powershell
+scp scripts/purge-module-version.sh root@147.45.211.122:/tmp/ruleshift-purge-module-version
+```
+
+Install it once on the VPS:
+
+```bash
+sudo install -o root -g root -m 0750 \
+  /tmp/ruleshift-purge-module-version \
+  /usr/local/sbin/ruleshift-purge-module-version
+rm /tmp/ruleshift-purge-module-version
+```
+
+Preview a failed module version purge:
+
+```bash
+sudo /usr/local/sbin/ruleshift-purge-module-version \
+  --developer-id default \
+  --module-id leastpopular \
+  --version 1.0.3 \
+  --delete-rooms
+```
+
+Execute it:
+
+```bash
+sudo /usr/local/sbin/ruleshift-purge-module-version \
+  --developer-id default \
+  --module-id leastpopular \
+  --version 1.0.3 \
+  --delete-rooms \
+  --yes
+```
+
+By default the script only selects `failed` versions. Purging active or inactive
+versions is destructive for rooms pinned to those versions and must be requested
+explicitly with `--status any --allow-non-failed --delete-rooms --yes`.
