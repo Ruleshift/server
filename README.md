@@ -60,6 +60,7 @@ flowchart LR
 | Управлять модулями и комнатами | [Developer API v2](docs/developer-api.md) · [русская версия](docs/ru/developer-api.md) |
 | Подключить Steam-аутентификацию | [Steam integration](docs/steam-integration.md) · [русская версия](docs/ru/steam-integration.md) |
 | Настроить production-наблюдаемость | [Observability](docs/observability.md) · [k3s deployment](deploy/k3s/observability/README.md) |
+| Настроить промокоды для game jam | [Game jam promotions](docs/ru/gamejam-promotions.md) · [OpenAPI](api/gamejam-promotions.openapi.yaml) |
 | Посмотреть модель хранения | [Database](docs/database.md) · [русская версия](docs/ru/database.md) |
 | Изучить benchmark scope | [Performance report](docs/performance-report.md) · [русская версия](docs/ru/performance-report.md) |
 
@@ -109,6 +110,7 @@ RULESHIFT_KUBECONFIG        # опционально при запуске вн�
 - [Module Runtime ABI](internal/moduleruntime/proto/module_runtime.proto)
 - [OpenAPI: Developer API](api/developer.openapi.yaml)
 - [OpenAPI: Observability API](api/observability.openapi.yaml)
+- [OpenAPI: Game Jam Promotions API](api/gamejam-promotions.openapi.yaml)
 - [External modules](examples/modules/README.md)
 - [Hidden Number example](examples/modules/hiddennumber)
 - [Xiangqi example](examples/modules/xiangqi)

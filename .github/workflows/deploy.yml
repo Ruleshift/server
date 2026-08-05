@@ -21,6 +21,22 @@ jobs:
     outputs:
       gateway_image: ${{ steps.images.outputs.gateway }}
       observability_image: ${{ steps.images.outputs.observability }}
+      gamejam_promotions_image: ${{ steps.images.outputs.gamejam_promotions }}
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ruleshift_gamejam_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ruleshift_gamejam_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     steps:
       - name: Checkout repository
@@ -35,6 +51,11 @@ jobs:
       - name: Run tests
         run: go test ./...
 
+      - name: Run game jam PostgreSQL integration tests
+        env:
+          GAMEJAM_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/ruleshift_gamejam_test?sslmode=disable
+        run: go test -tags=integration ./internal/gamejampromo
+
       - name: Log in to GitHub Container Registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
@@ -44,10 +65,13 @@ jobs:
         run: |
           gateway="ghcr.io/${GITHUB_REPOSITORY,,}"
           observability="${gateway}-observability"
+          gamejam_promotions="${gateway}-gamejam-promotions"
           echo "gateway=$gateway" >> "$GITHUB_OUTPUT"
           echo "observability=$observability" >> "$GITHUB_OUTPUT"
+          echo "gamejam_promotions=$gamejam_promotions" >> "$GITHUB_OUTPUT"
           echo "GATEWAY_IMAGE=$gateway" >> "$GITHUB_ENV"
           echo "OBSERVABILITY_IMAGE=$observability" >> "$GITHUB_ENV"
+          echo "GAMEJAM_PROMOTIONS_IMAGE=$gamejam_promotions" >> "$GITHUB_ENV"
 
       - name: Build gateway image
         run: |
@@ -65,12 +89,22 @@ jobs:
             -t "$OBSERVABILITY_IMAGE:${{ github.sha }}" \
             .
 
+      - name: Build game jam promotions image
+        run: |
+          docker build \
+            --build-arg BINARY=./cmd/gamejam-promotions \
+            -t "$GAMEJAM_PROMOTIONS_IMAGE:latest" \
+            -t "$GAMEJAM_PROMOTIONS_IMAGE:${{ github.sha }}" \
+            .
+
       - name: Push images
         run: |
           docker push "$GATEWAY_IMAGE:latest"
           docker push "$GATEWAY_IMAGE:${{ github.sha }}"
           docker push "$OBSERVABILITY_IMAGE:latest"
           docker push "$OBSERVABILITY_IMAGE:${{ github.sha }}"
+          docker push "$GAMEJAM_PROMOTIONS_IMAGE:latest"
+          docker push "$GAMEJAM_PROMOTIONS_IMAGE:${{ github.sha }}"
 
   gateway-update:
     if: ${{ needs.build.result == 'success' && vars.K3S_AUTO_DEPLOY == 'true' }}

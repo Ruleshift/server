@@ -145,6 +145,25 @@ a { color: inherit; text-decoration: none; }
 .example-links a:last-child { border-right: 0; }
 .example-links a:hover { color: var(--ink); background: var(--yellow); }
 
+.gamejam-discount { min-height: 540px; padding: 100px max(48px, calc((100vw - 1120px) / 2)); display: grid; grid-template-columns: 1fr 1fr; align-items: center; gap: 72px; color: var(--ink); background: var(--yellow); }
+.discount-copy .section-kicker { color: #665217; }
+.discount-copy h2 { margin: 0; font-family: "Archivo Black", sans-serif; font-size: clamp(42px, 5vw, 70px); line-height: .98; letter-spacing: -.04em; }
+.discount-copy h2 span { color: var(--paper); text-shadow: 4px 4px 0 var(--red); }
+.discount-copy > p:last-child { max-width: 580px; margin: 28px 0 0; color: #5a4b1b; font-size: 15px; line-height: 1.7; }
+.discount-form { border: 2px solid var(--ink); padding: 30px; background: var(--paper); box-shadow: 8px 8px 0 var(--cyan), 15px 15px 0 var(--red); }
+.discount-form > label { display: block; margin-bottom: 12px; font-size: 10px; font-weight: 800; letter-spacing: .14em; }
+.discount-input-row { display: grid; grid-template-columns: 1fr 170px; border: 2px solid var(--ink); }
+.discount-input-row input { min-width: 0; height: 62px; border: 0; padding: 0 18px; outline: 0; color: var(--ink); background: transparent; font-family: Consolas, monospace; font-size: clamp(20px, 2.4vw, 30px); font-weight: 700; letter-spacing: .13em; }
+.discount-input-row:focus-within { box-shadow: 5px 5px 0 var(--cyan); }
+.discount-input-row button { border: 0; border-left: 2px solid var(--ink); padding: 0 14px; display: flex; align-items: center; justify-content: center; gap: 9px; color: var(--paper); background: var(--ink); cursor: pointer; font-size: 10px; font-weight: 800; letter-spacing: .08em; }
+.discount-input-row button:hover:not(:disabled) { color: var(--ink); background: var(--cyan); }
+.discount-input-row button:disabled { cursor: not-allowed; opacity: .48; }
+.discount-hint { display: block; margin-top: 12px; color: #817a64; font-size: 11px; }
+.discount-result { min-height: 72px; margin-top: 18px; border-top: 1px solid #b6ae91; padding-top: 17px; color: #6d6755; font-size: 13px; line-height: 1.55; }
+.discount-result:empty { min-height: 0; margin: 0; padding: 0; border: 0; }
+.discount-result.success { color: #087644; font-weight: 700; }
+.discount-result.invalid, .discount-result.error { color: #b82f2b; }
+
 .cta-section { min-height: 460px; padding: 90px max(48px, calc((100vw - 1120px) / 2)); display: grid; grid-template-columns: 1.45fr .55fr; align-items: center; gap: 60px; background: var(--red); color: var(--ink); }
 .cta-section h2 span { color: var(--paper); text-shadow: 4px 4px 0 var(--cyan); }
 .cta-actions { display: flex; flex-direction: column; align-items: stretch; gap: 20px; }
@@ -206,7 +225,7 @@ a { color: inherit; text-decoration: none; }
   .tech-sticker { width: 44px; height: 44px; font-size: 24px; }
   .sticker-go { left: 4%; }.sticker-k8s { right: 4%; }.sticker-pg { left: 8%; }.sticker-docker { right: 8%; }
   .sticker-unity, .sticker-prom { display: none; }
-  .section-heading-row, .cta-section { grid-template-columns: 1fr; }
+  .section-heading-row, .cta-section, .gamejam-discount { grid-template-columns: 1fr; }
   .feature-grid { grid-template-columns: repeat(2, 1fr); }
   .feature-card:nth-child(3n) { border-right: 2px solid var(--ink); }
   .feature-card:nth-child(2n) { border-right: 0; }
@@ -252,6 +271,10 @@ a { color: inherit; text-decoration: none; }
   .example-links a { border-right: 0; border-bottom: var(--border); }
   .example-links a:last-child { border-bottom: 0; }
   .cta-section { padding: 80px 20px; }
+  .gamejam-discount { min-height: 0; padding: 80px 20px; gap: 44px; }
+  .discount-form { padding: 20px; box-shadow: 6px 6px 0 var(--cyan), 11px 11px 0 var(--red); }
+  .discount-input-row { grid-template-columns: 1fr; }
+  .discount-input-row button { min-height: 52px; border-left: 0; border-top: 2px solid var(--ink); }
   .docs-hero { padding: 75px 20px 60px; }
   .docs-search { grid-template-columns: 1fr 42px; }
   .docs-search > span { display: none; }

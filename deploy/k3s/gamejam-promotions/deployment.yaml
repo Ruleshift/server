@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ruleshift-gamejam-promotions
+  labels: {app: ruleshift-gamejam-promotions}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: ruleshift-gamejam-promotions}
+  template:
+    metadata:
+      labels: {app: ruleshift-gamejam-promotions}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: gamejam-promotions
+          image: ghcr.io/ruleshift/server-gamejam-promotions:latest
+          imagePullPolicy: Always
+          env:
+            - {name: GAMEJAM_PUBLIC_ADDR, value: ":8082"}
+            - {name: GAMEJAM_ADMIN_ADDR, value: ":9092"}
+            - {name: GAMEJAM_ALLOWED_ORIGIN, value: "https://ruleshift.ru"}
+            - {name: GAMEJAM_SYNC_INTERVAL, value: "6h"}
+            - {name: GAMEJAM_SOURCE_USER_AGENT, value: "RuleshiftGameJamBot/1.0 (+https://ruleshift.ru/)"}
+            - name: GAMEJAM_DATABASE_URL
+              valueFrom: {secretKeyRef: {name: ruleshift-gamejam-promotions, key: database-url}}
+            - name: GAMEJAM_CODE_MASTER_KEY
+              valueFrom: {secretKeyRef: {name: ruleshift-gamejam-promotions, key: code-master-key}}
+            - name: GAMEJAM_ADMIN_USERNAME
+              valueFrom: {secretKeyRef: {name: ruleshift-gamejam-promotions, key: admin-username}}
+            - name: GAMEJAM_ADMIN_PASSWORD_BCRYPT
+              valueFrom: {secretKeyRef: {name: ruleshift-gamejam-promotions, key: admin-password-bcrypt}}
+          ports:
+            - {name: public, containerPort: 8082}
+            - {name: admin, containerPort: 9092}
+          readinessProbe:
+            httpGet: {path: /readyz, port: public}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: public}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ruleshift-gamejam-promotions-public
+spec:
+  type: ClusterIP
+  selector: {app: ruleshift-gamejam-promotions}
+  ports:
+    - {name: http, port: 8082, targetPort: public}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ruleshift-gamejam-promotions-admin
+spec:
+  type: ClusterIP
+  selector: {app: ruleshift-gamejam-promotions}
+  ports:
+    - {name: http, port: 9092, targetPort: admin}

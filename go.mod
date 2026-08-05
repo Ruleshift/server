@@ -7,6 +7,8 @@ require (
 	github.com/jackc/pgx/v5 v5.7.5
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
+	golang.org/x/crypto v0.41.0
+	golang.org/x/net v0.43.0
 	google.golang.org/grpc v1.75.1
 	google.golang.org/protobuf v1.36.11
 	k8s.io/api v0.33.2
@@ -44,8 +46,6 @@ require (
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
-	golang.org/x/crypto v0.41.0 // indirect
-	golang.org/x/net v0.43.0 // indirect
 	golang.org/x/oauth2 v0.30.0 // indirect
 	golang.org/x/sync v0.16.0 // indirect
 	golang.org/x/sys v0.35.0 // indirect

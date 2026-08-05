@@ -6,6 +6,7 @@ import {
   FiCheck,
   FiCopy,
   FiExternalLink,
+  FiGift,
   FiMenu,
   FiRadio,
   FiRefreshCw,
@@ -24,6 +25,7 @@ import {
 } from "react-icons/si";
 
 const REPOSITORY = "https://github.com/Ruleshift/server";
+const GAMEJAM_API_URL = import.meta.env.VITE_GAMEJAM_API_URL?.replace(/\/$/, "") ?? "";
 
 const examples = {
   sdk: {
@@ -68,6 +70,7 @@ const docs = [
   { title: "Developer API", description: "Publish module versions, validate them and create rooms from trusted code.", path: "docs/developer-api.md", tag: "API" },
   { title: "Unity client", description: "Connect a Unity player build to the protobuf WebSocket endpoint.", path: "docs/unity-client.md", tag: "SDK" },
   { title: "Observability", description: "Prometheus metrics, structured logs, Grafana and safe public diagnostics.", path: "docs/observability.md", tag: "OPS" },
+  { title: "Game jam promotions", description: "Discover, moderate and verify promotion codes for Russian game jams.", path: "docs/gamejam-promotions.md", tag: "PROMO" },
   { title: "Database", description: "Control data, room persistence, snapshots and isolated module storage.", path: "docs/database.md", tag: "STORAGE" },
   { title: "Steam integration", description: "Replaceable authentication and Steam ticket verification boundaries.", path: "docs/steam-integration.md", tag: "AUTH" },
   { title: "Performance report", description: "Benchmark scope, hot paths and the measurements that matter.", path: "docs/performance-report.md", tag: "PERF" },
@@ -306,6 +309,84 @@ function CodeExample() {
   );
 }
 
+function GameJamDiscount() {
+  const [code, setCode] = useState("");
+  const [state, setState] = useState("idle");
+  const [gameJam, setGameJam] = useState(null);
+
+  const submit = async (event) => {
+    event.preventDefault();
+    if (code.length !== 10 || state === "loading") return;
+    setState("loading");
+    setGameJam(null);
+    try {
+      const response = await fetch(`${GAMEJAM_API_URL}/v1/gamejam-discounts/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+        credentials: "omit",
+      });
+      if (!response.ok) throw new Error("verification unavailable");
+      const result = await response.json();
+      if (!result.valid) {
+        setState("invalid");
+        return;
+      }
+      if (!result.game_jam || typeof result.game_jam.title !== "string" || !result.game_jam.title) {
+        throw new Error("invalid verification response");
+      }
+      setGameJam(result.game_jam);
+      setState("success");
+    } catch {
+      setState("error");
+    }
+  };
+
+  const resultMessage = state === "success"
+    ? `Код подтверждён. Для участников «${gameJam?.title}» доступна скидка Ruleshift. Размер и условия будут объявлены позднее.`
+    : state === "invalid"
+      ? "Код недействителен или сейчас не действует."
+      : state === "error"
+        ? "Не удалось проверить код. Попробуйте ещё раз позже."
+        : "";
+
+  return (
+    <section className="gamejam-discount" aria-labelledby="gamejam-discount-title">
+      <div className="discount-copy">
+        <p className="section-kicker"><FiGift /> GAME JAM DISCOUNT</p>
+        <h2 id="gamejam-discount-title">JAM TOGETHER.<br /><span>SHIP WITH RULESHIFT.</span></h2>
+        <p>Участвуете в российском или русскоязычном game jam? Введите код от организатора, чтобы подтвердить право на будущую скидку Ruleshift.</p>
+      </div>
+      <form className="discount-form" onSubmit={submit}>
+        <label htmlFor="gamejam-code">10-DIGIT JAM CODE</label>
+        <div className="discount-input-row">
+          <input
+            id="gamejam-code"
+            value={code}
+            onChange={(event) => {
+              setCode(event.target.value.replace(/\D/g, "").slice(0, 10));
+              setState("idle");
+              setGameJam(null);
+            }}
+            inputMode="numeric"
+            autoComplete="off"
+            maxLength={10}
+            placeholder="0000000000"
+            aria-describedby="gamejam-code-hint gamejam-code-result"
+          />
+          <button type="submit" disabled={code.length !== 10 || state === "loading"}>
+            {state === "loading" ? "CHECKING…" : "VERIFY CODE"} <FiArrowRight />
+          </button>
+        </div>
+        <span id="gamejam-code-hint" className="discount-hint">Код не сохраняется на этом устройстве.</span>
+        <div id="gamejam-code-result" className={`discount-result ${state}`} aria-live="polite">
+          {resultMessage}
+        </div>
+      </form>
+    </section>
+  );
+}
+
 function HomePage({ navigate }) {
   return (
     <main>
@@ -314,6 +395,7 @@ function HomePage({ navigate }) {
       <FeatureSection />
       <ArchitectureSection />
       <CodeExample />
+      <GameJamDiscount />
       <section className="cta-section">
         <div>
           <p className="section-kicker light">PROTOBUF IN. COHERENCE OUT.</p>

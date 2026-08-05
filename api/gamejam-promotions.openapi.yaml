@@ -1,0 +1,241 @@
+openapi: 3.1.0
+info:
+  title: Ruleshift Game Jam Promotions API
+  version: 1.0.0
+  description: Public promotion-code verification and Basic-authenticated moderation API.
+servers:
+  - url: https://gamejam-api.ruleshift.dev
+paths:
+  /healthz:
+    get:
+      operationId: gameJamPromotionsHealth
+      responses:
+        "200": {description: Process health}
+  /readyz:
+    get:
+      operationId: gameJamPromotionsReadiness
+      responses:
+        "200": {description: PostgreSQL is reachable}
+        "503": {description: PostgreSQL is unavailable}
+  /v1/gamejam-discounts/verify:
+    post:
+      operationId: verifyGameJamDiscount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code]
+              properties:
+                code: {type: string, pattern: "^[0-9]{10}$"}
+      responses:
+        "200":
+          description: Valid or inactive code result
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Verification"}
+        "400": {description: Malformed request or code}
+        "503": {description: Service or PostgreSQL temporarily unavailable}
+  /admin/api/v1/candidates:
+    get:
+      security: [{basicAuth: []}]
+      operationId: listGameJamCandidates
+      parameters:
+        - {name: source, in: query, schema: {type: string, enum: [gamedev_afisha, jammer, itch_io]}}
+        - {name: format, in: query, schema: {$ref: "#/components/schemas/Format"}}
+        - {name: relevance, in: query, schema: {$ref: "#/components/schemas/Relevance"}}
+        - {name: status, in: query, schema: {type: string, enum: [pending, approved, rejected, archived]}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
+        - {name: offset, in: query, schema: {type: integer, minimum: 0, maximum: 10000, default: 0}}
+      responses:
+        "200": {description: Bounded candidate page}
+        "401": {description: Basic authentication required}
+  /admin/api/v1/candidates/{id}:
+    patch:
+      security: [{basicAuth: []}]
+      operationId: updateGameJamCandidate
+      parameters: [{$ref: "#/components/parameters/ID"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CandidateUpdate"}
+      responses:
+        "204": {description: Candidate updated}
+        "400": {description: Invalid candidate fields}
+        "401": {description: Basic authentication required}
+        "404": {description: Candidate not found}
+  /admin/api/v1/candidates/{id}/approve:
+    post:
+      security: [{basicAuth: []}]
+      operationId: approveGameJamCandidate
+      parameters: [{$ref: "#/components/parameters/ID"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason]
+              properties:
+                reason: {$ref: "#/components/schemas/EligibilityReason"}
+      responses:
+        "201": {description: Game jam and encrypted-at-rest promotion code created}
+        "409": {description: Candidate is already linked}
+  /admin/api/v1/candidates/{id}/reject:
+    post:
+      security: [{basicAuth: []}]
+      operationId: rejectGameJamCandidate
+      parameters: [{$ref: "#/components/parameters/ID"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason]
+              properties:
+                reason: {type: string, minLength: 1, maxLength: 512}
+      responses:
+        "204": {description: Candidate rejected}
+  /admin/api/v1/candidates/{id}/merge:
+    post:
+      security: [{basicAuth: []}]
+      operationId: mergeGameJamCandidate
+      parameters: [{$ref: "#/components/parameters/ID"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [game_jam_id]
+              properties:
+                game_jam_id: {type: string, pattern: "^[0-9a-f]{32}$"}
+      responses:
+        "204": {description: Candidate linked to the existing game jam}
+        "409": {description: Candidate is already linked}
+  /admin/api/v1/candidates/{id}/review-update:
+    post:
+      security: [{basicAuth: []}]
+      operationId: reviewGameJamCandidateSourceUpdate
+      parameters: [{$ref: "#/components/parameters/ID"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [apply]
+              properties:
+                apply: {type: boolean, description: Apply source fields to the approved snapshot when true; keep the snapshot when false.}
+      responses:
+        "204": {description: Source update reviewed}
+        "409": {description: Candidate is not linked or has no pending source diff}
+  /admin/api/v1/gamejams:
+    get:
+      security: [{basicAuth: []}]
+      operationId: listApprovedGameJams
+      responses:
+        "200": {description: Approved game jams including decryptable active codes}
+  /admin/api/v1/gamejams/{id}:
+    patch:
+      security: [{basicAuth: []}]
+      operationId: updateApprovedGameJam
+      parameters: [{$ref: "#/components/parameters/ID"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GameJamUpdate"}
+      responses:
+        "204": {description: Game jam updated}
+  /admin/api/v1/gamejams/{id}/rotate-code:
+    post:
+      security: [{basicAuth: []}]
+      operationId: rotateGameJamCode
+      parameters: [{$ref: "#/components/parameters/ID"}]
+      responses:
+        "200":
+          description: Old code revoked and replacement returned
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code]
+                properties:
+                  code: {type: string, pattern: "^[0-9]{10}$"}
+  /admin/api/v1/discovery/run:
+    post:
+      security: [{basicAuth: []}]
+      operationId: runGameJamDiscovery
+      responses:
+        "202": {description: Discovery scheduled}
+  /admin/api/v1/discovery/runs:
+    get:
+      security: [{basicAuth: []}]
+      operationId: listGameJamDiscoveryRuns
+      responses:
+        "200": {description: Latest 50 bounded source runs}
+components:
+  securitySchemes:
+    basicAuth: {type: http, scheme: basic}
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      schema: {type: string, pattern: "^[0-9a-f]{32}$"}
+  schemas:
+    Format: {type: string, enum: [online, offline, hybrid, unknown]}
+    Relevance: {type: string, enum: [likely_ru, unknown, unlikely_ru]}
+    EligibilityReason: {type: string, enum: [venue_ru, language_ru, audience_ru, organizer_ru]}
+    Verification:
+      type: object
+      required: [valid, message]
+      properties:
+        valid: {type: boolean}
+        message: {type: string}
+        game_jam:
+          type: object
+          required: [title, format, ends_on]
+          properties:
+            title: {type: string}
+            format: {$ref: "#/components/schemas/Format"}
+            city: {type: [string, "null"]}
+            ends_on: {type: string, format: date}
+    CandidateUpdate:
+      type: object
+      additionalProperties: false
+      required: [official_url, title, organizer, format, city, country_code, languages, starts_on, ends_on, relevance]
+      properties:
+        official_url: {type: string, maxLength: 2048, pattern: "^$|^https://"}
+        title: {type: string, minLength: 1, maxLength: 300}
+        organizer: {type: string, maxLength: 300}
+        format: {$ref: "#/components/schemas/Format"}
+        city: {type: string, maxLength: 200}
+        country_code: {type: string, maxLength: 2}
+        languages: {type: array, maxItems: 16, items: {type: string}}
+        starts_on: {type: string, format: date}
+        ends_on: {type: string, format: date}
+        relevance: {$ref: "#/components/schemas/Relevance"}
+    GameJamUpdate:
+      type: object
+      additionalProperties: false
+      required: [title, organizer, format, city, country_code, languages, starts_on, ends_on, status]
+      properties:
+        title: {type: string, minLength: 1, maxLength: 300}
+        organizer: {type: string, maxLength: 300}
+        format: {$ref: "#/components/schemas/Format"}
+        city: {type: string, maxLength: 200}
+        country_code: {type: string, maxLength: 2}
+        languages: {type: array, maxItems: 16, items: {type: string}}
+        starts_on: {type: string, format: date}
+        ends_on: {type: string, format: date}
+        status: {type: string, enum: [approved, disabled, ended]}

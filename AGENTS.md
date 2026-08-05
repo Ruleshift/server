@@ -52,6 +52,17 @@ Implemented and wired by `cmd/gateway`:
 - independently built Hidden Number, Xiangqi, and Card Game example modules;
 - k3s deployment assets and GitHub Actions image publication/deployment.
 
+Implemented as a separate `cmd/gamejam-promotions` service:
+
+- bounded HTTPS discovery adapters for GameDev Afisha, Jammer, and itch.io;
+- manual Basic-authenticated moderation of Russian/Russian-language game jams;
+- a dedicated PostgreSQL database with encrypted shared 10-digit promotion codes;
+- public date-bounded code verification used by the static website;
+- separate public/admin listeners, metrics, OpenAPI, tests, and k3s assets.
+
+This service is not part of the authoritative gateway, Developer API, control
+database, module databases, room protocol, or player identity system.
+
 Present as tested in-memory library code, but not wired into a command, database,
 HTTP API, player protocol, or production deployment:
 
@@ -144,6 +155,7 @@ Grafana                  -> private Prometheus + Loki
 | --- | --- |
 | `cmd/gateway` | Composition root for PostgreSQL, Kubernetes, room registry, auth, Developer API, public HTTP/WebSocket, and private operations listener. Keep domain logic out. |
 | `cmd/observability-api` | Public read-only aggregate/room observability process. |
+| `cmd/gamejam-promotions` | Standalone game-jam discovery, moderation, and promotion-code process with separate public/admin listeners and database. |
 | `cmd/botload` | Future load-generator CLI; currently a skeleton. |
 | `internal/auth` | Replaceable identity providers and identity persistence boundary. |
 | `internal/protocol` | Player protobuf v2 schema, generated Go bindings, framing codec, and codec benchmarks. |
@@ -159,6 +171,7 @@ Grafana                  -> private Prometheus + Loki
 | `internal/metrics` | Bounded-label Prometheus instrumentation. |
 | `internal/operations` | Private payload-free room diagnostics and opaque public room references. |
 | `internal/observabilityapi` | Fixed PromQL overview and bounded proxy to private room diagnostics. |
+| `internal/gamejampromo` | Bounded external-source discovery, manual moderation, encrypted promotion codes, dedicated PostgreSQL store, public verification, and Basic-authenticated admin UI. It must not import gateway or room domain packages. |
 | `internal/allocator` | In-memory game-server capacity/reservation library; not production-wired. |
 | `internal/matchmaking` | In-memory ticket/match/assignment state machine; not production-wired. |
 | `internal/connecttoken` | HMAC-signed assignment connect tokens; not production-wired. |
@@ -611,6 +624,26 @@ Gateway configuration is loaded in `internal/config`.
 | `OBS_SLOW_CONSUMER_RATIO_THRESHOLD` | `0.005` |
 | `OBS_MIN_COMMANDS` | `100` |
 
+`cmd/gamejam-promotions` uses:
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `GAMEJAM_PUBLIC_ADDR` | `:8082` | Public code verification listener. |
+| `GAMEJAM_ADMIN_ADDR` | `:9092` | Basic-authenticated admin and metrics listener. |
+| `GAMEJAM_DATABASE_URL` | empty | Required; selects the dedicated game-jam database. |
+| `GAMEJAM_CODE_MASTER_KEY` | empty | Required base64 encoding of exactly 32 stable random bytes. |
+| `GAMEJAM_ADMIN_USERNAME` | empty | Required Basic Auth username. |
+| `GAMEJAM_ADMIN_PASSWORD_BCRYPT` | empty | Required bcrypt password hash. |
+| `GAMEJAM_ALLOWED_ORIGIN` | `https://ruleshift.ru` | Exact custom-domain CORS origin for the GitHub Pages site. |
+| `GAMEJAM_SYNC_INTERVAL` | `6h` | Discovery cadence; discovery also runs on startup. |
+| `GAMEJAM_SOURCE_USER_AGENT` | Ruleshift bot identifier | Contact identity sent to source sites. |
+
+Game-jam codes are shared and non-consuming, work only on inclusive Moscow
+calendar dates for an approved event, and are never logged. The full code is
+encrypted with AES-256-GCM and indexed by HMAC-SHA256 using keys derived from the
+stable master key. Discovery classification never activates a promotion; admin
+approval with an explicit eligibility reason is required.
+
 ## Local development
 
 Required backend toolchain:
@@ -649,6 +682,7 @@ go vet ./...
 go test -race ./...
 go test -bench ./...
 go run ./cmd/observability-api
+go run ./cmd/gamejam-promotions
 dotnet pack sdk/dotnet/Ruleshift.Developer -c Release
 ```
 
@@ -740,10 +774,11 @@ documented desktop/mobile sizes.
 `.github/workflows/deploy.yml` runs on `main` and manual dispatch:
 
 1. `go test ./...`;
-2. build gateway and observability images through the common Dockerfile using
-   `BINARY=./cmd/gateway` or `./cmd/observability-api`;
-3. push `latest` and immutable commit-SHA tags to GHCR;
-4. when `K3S_AUTO_DEPLOY=true`, SSH to the VPS and invoke
+2. run the game-jam PostgreSQL integration test;
+3. build gateway, observability, and game-jam promotion images through the
+   common Dockerfile using the corresponding `BINARY=./cmd/...` value;
+4. push `latest` and immutable commit-SHA tags to GHCR;
+5. when `K3S_AUTO_DEPLOY=true`, SSH to the VPS and invoke
    `ruleshift-update-gateway ghcr.io/ruleshift/server:<40-char-sha>`.
 
 `scripts/update-gateway.sh` validates the immutable SHA/digest reference,
