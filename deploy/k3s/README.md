@@ -1,5 +1,17 @@
 # Ruleshift k3s operations
 
+## Installing the gateway
+
+The reproducible base gateway installation is under `deploy/k3s/gateway`.
+It owns the `ruleshift-core` namespace, scheduler RBAC, gateway Deployment and
+Service, public TLS Ingress, configuration, and ingress NetworkPolicy. Follow
+`deploy/k3s/gateway/README.md` to select an immutable image and create the
+runtime Secret before the first apply.
+
+PostgreSQL remains an explicit external prerequisite; do not expose it
+publicly. The observability and game-jam packages are applied only after the
+base gateway is healthy.
+
 ## Updating the gateway
 
 `scripts/update-gateway.sh` updates the gateway Deployment from an immutable

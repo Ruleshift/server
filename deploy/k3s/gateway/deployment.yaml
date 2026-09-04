@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ruleshift-gateway
+  namespace: ruleshift-core
+  labels:
+    app: ruleshift-gateway
+    ruleshift.io/component: gateway
+spec:
+  # The in-memory authoritative room registry is single-writer. Recreate avoids
+  # serving the same room from old and new gateway pods during an update.
+  replicas: 1
+  strategy:
+    type: Recreate
+  revisionHistoryLimit: 3
+  progressDeadlineSeconds: 300
+  selector:
+    matchLabels:
+      app: ruleshift-gateway
+  template:
+    metadata:
+      labels:
+        app: ruleshift-gateway
+        ruleshift.io/component: gateway
+    spec:
+      serviceAccountName: ruleshift-gateway
+      automountServiceAccountToken: true
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          # Replace this non-existent placeholder with an immutable Git SHA tag
+          # or OCI digest before the first apply.
+          image: ghcr.io/ruleshift/server@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: operations
+              containerPort: 9091
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: ruleshift-gateway-config
+            - secretRef:
+                name: ruleshift-gateway-secrets
+            # The observability package supplies this optional override to bind
+            # the operations listener on :9091 and expose its private Service.
+            - configMapRef:
+                name: ruleshift-gateway-observability
+                optional: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+

@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ruleshift-gateway-config
+  namespace: ruleshift-core
+data:
+  RULESHIFT_ADDR: ":8080"
+  RULESHIFT_OPERATIONS_ADDR: "127.0.0.1:9091"
+  RULESHIFT_ENV: "prod"
+  RULESHIFT_MODULE_DATABASE_PREFIX: "ruleshift_module_"
+  RULESHIFT_DEVELOPER_ID: "default"
+  RULESHIFT_DEVELOPER_NAME: "Default developer"
+  RULESHIFT_MAX_MESSAGE_BYTES: "65536"
+  RULESHIFT_ROOM_INPUT_QUEUE_SIZE: "1024"
+  RULESHIFT_SESSION_SEND_QUEUE_SIZE: "256"
+  RULESHIFT_AUTH_TIMEOUT: "5s"
+  RULESHIFT_READ_TIMEOUT: "30s"
+  # Module publication performs image readiness and conformance checks before
+  # writing the response, so production allows more than the code default.
+  RULESHIFT_WRITE_TIMEOUT: "5m"
+  RULESHIFT_SHUTDOWN_TIMEOUT: "30s"
+  RULESHIFT_ENABLE_METRICS: "true"
+  RULESHIFT_ENABLE_PPROF: "false"
+  RULESHIFT_QUEUE_DEGRADED_RATIO: "0.8"
+

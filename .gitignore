@@ -14,3 +14,6 @@ site/.npm-cache/
 sdk/dotnet/**/bin/
 sdk/dotnet/**/obj/
 sdk/dotnet/obj/Debug/netstandard2.1
+
+# Local production secrets; commit only secret.example.yaml templates.
+deploy/k3s/gateway/secret.yaml

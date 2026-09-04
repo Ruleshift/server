@@ -1,0 +1,27 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ruleshift-gateway-ingress
+  namespace: ruleshift-core
+spec:
+  podSelector:
+    matchLabels:
+      app: ruleshift-gateway
+  policyTypes:
+    - Ingress
+  ingress:
+    # Traefik may run in kube-system or another operator-selected namespace.
+    # Port 8080 remains a ClusterIP-only service and the Developer API enforces
+    # its own bearer authentication.
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - port: 8080
+          protocol: TCP
+    # Prometheus and observability-api run beside the gateway in ruleshift-core.
+    - from:
+        - podSelector: {}
+      ports:
+        - port: 9091
+          protocol: TCP
+
